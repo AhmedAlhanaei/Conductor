@@ -24,7 +24,12 @@
 #                               pull request whose changed files all match may reference
 #                               its task with "Refs #n" instead of closing one
 #   CONDUCTOR_APPROVAL_MODE     "manual" (default) or "auto" (ADR 0005), the project's
-#                               `Approval mode` fact. In auto, a sub-issue's parent must
+#                               `Approval mode` fact. In manual every gate is the owner's:
+#                               the readiness label on the task a pull request closes, or
+#                               references on the record-only path, must have been applied
+#                               last by the owner (CONDUCTOR_OWNER_LOGIN), read from the
+#                               issue timeline, whatever the task's priority or category;
+#                               this is the kill switch of ADR 0009. In auto, a sub-issue's parent must
 #                               carry the readiness label too (the owner readied the parent
 #                               once; the children inherit), and the pull request must target
 #                               the integration branch unless it promotes that branch into
@@ -49,8 +54,10 @@
 #                               readiness label applied by the owner
 #   CONDUCTOR_OWNER_LOGIN       default the repository owner: the login whose `labeled`
 #                               event on the issue timeline counts as the owner's Ready.
-#                               With neither threshold set the timeline is never read and
-#                               the check behaves as before ADR 0008
+#                               In auto with neither threshold set the timeline is never
+#                               read and the check behaves as before ADR 0008; in manual it
+#                               is read for every readied task. A failed lookup, or a
+#                               timeline with no such event, fails the check
 name: PR policy
 on:
   pull_request:
@@ -164,11 +171,14 @@ jobs:
           owner_categories = [c.strip() for c in os.environ.get("OWNER_CATEGORIES", "").split(",") if c.strip()]
           owner_login = os.environ.get("OWNER_LOGIN", "").strip()
           thresholds = mode == "auto" and bool(priority_cap or owner_categories)
+          # Kill switch (ADR 0009): in manual every gate is the owner's, so the readiness label
+          # on the named task must be the owner's own, at any priority and in any category.
+          owner_ready_only = mode == "manual"
           if priority_cap and priority_cap not in priorities:
               print(f"::error::CONDUCTOR_ASSISTANT_PRIORITY_CAP must be one of the priority labels ({', '.join(priorities)}), not {priority_cap!r}")
               sys.exit(1)
-          if thresholds and not owner_login:
-              print("::error::CONDUCTOR_OWNER_LOGIN is empty; the thresholds need the owner's login to compare the readiness label's actor against")
+          if (thresholds or owner_ready_only) and not owner_login:
+              print("::error::CONDUCTOR_OWNER_LOGIN is empty; approval mode manual and the thresholds in auto need the owner's login to compare the readiness label's actor against")
               sys.exit(1)
 
           def threshold_reasons(labels):
@@ -265,12 +275,21 @@ jobs:
                   if problem:
                       failed = True
                       print(f"::error::Task #{number} carries '{review_required}' and the pull request records no review of its head: {problem}")
-              reasons = threshold_reasons(labels) if thresholds and closing and not problems else []
+              if owner_ready_only:
+                  # Closing and record-only paths alike; a referenced tracking record that
+                  # carries no readiness label has no Ready to attribute.
+                  reasons = ["approval mode is manual"] if ready in labels and not problems else []
+                  rule = "In manual every gate is the owner's and no other identity's Ready authorizes a pull request (ADR 0009)."
+              else:
+                  reasons = threshold_reasons(labels) if thresholds and closing and not problems else []
+                  rule = "Only the owner readies a sub-issue above the cap or in an owner-only category (ADR 0008)."
               if reasons:
                   actor = ready_actor(number)
                   if actor.lower() != owner_login.lower():
                       failed = True
-                      print(f"::error::Task #{number} must be readied by the owner ({owner_login}): " + "; ".join(reasons) + f", and '{ready}' was last applied by {actor or 'an unknown actor'}. Only the owner readies a sub-issue above the cap or in an owner-only category (ADR 0008).")
+                      print(f"::error::Task #{number} must be readied by the owner ({owner_login}): " + "; ".join(reasons) + f", and '{ready}' was last applied by {actor or 'an unknown actor'}. {rule}")
+                  elif owner_ready_only:
+                      print(f"Task #{number} was readied by the owner {actor} (approval mode manual).")
                   else:
                       print(f"Task #{number} is above the assistant thresholds (" + "; ".join(reasons) + f") and was readied by the owner {actor}.")
               if problems:
