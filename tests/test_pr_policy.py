@@ -87,8 +87,8 @@ class FakeGitHub:
         self.issues = dict(issues or {42: (["P2", "kind:chore", "status:ready"], "OPEN")})
         # issue number -> parent number, or an ApiError for the parent lookup; absent means 404
         self.parents = dict(parents or {})
-        # issue number -> list of timeline events (one page), or an ApiError; absent means an
-        # empty timeline
+        # issue number -> list of timeline events (one page), or an ApiError; absent means the
+        # owner applied every label the issue carries
         self.timelines = dict(timelines or {})
         self.calls = []
 
@@ -136,7 +136,9 @@ class FakeGitHub:
         match = re.fullmatch(r"repos/owner/repo/issues/(\d+)/timeline", args[-1]) if args[0] == "api" else None
         if match:
             assert args[1:3] == ["--paginate", "--slurp"], "the timeline must be read in full, as pages"
-            timeline = self.timelines.get(int(match.group(1)), [])
+            number = int(match.group(1))
+            owner = DEFAULT_ENV["OWNER_LOGIN"]
+            timeline = self.timelines.get(number, [labeled(name, owner) for name in self.issues.get(number, ([], ""))[0]])
             if isinstance(timeline, ApiError):
                 raise timeline
             return json.dumps([timeline])  # --slurp: one array per page
@@ -510,9 +512,11 @@ class ThresholdTests(PolicyTest):
         self.assertEqual(fake.timeline_calls(), [])
 
     def test_manual_mode_does_not_evaluate_the_thresholds(self):
-        fake = self._task(ready(priority="P0", category="kind:security"), [labeled("status:ready", "planner-bot")])
-        self.assertAccepted(fake, APPROVAL_MODE="manual", PRIORITY_CAP="P2", OWNER_CATEGORIES="kind:security")
-        self.assertEqual(fake.timeline_calls(), [])
+        # Manual has its own, wider rule (ManualOwnerReadyTests): the cap and the categories
+        # are not what decides, so an owner Ready passes and the output names no threshold.
+        fake = self._task(ready(priority="P0", category="kind:security"), [labeled("status:ready", "owner")])
+        output = self.assertAccepted(fake, APPROVAL_MODE="manual", PRIORITY_CAP="P2", OWNER_CATEGORIES="kind:security")
+        self.assertNotIn("assistant thresholds", output)
 
     def test_timeline_lookup_failure_fails_the_check(self):
         fake = self._task(ready(priority="P1"), ApiError(1, "gh: Resource not accessible by integration (HTTP 403)\n"))
@@ -553,3 +557,89 @@ class ThresholdTests(PolicyTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ManualOwnerReadyTests(PolicyTest):
+    """Kill switch (ADR 0009 §5, #113): in approval mode manual the readiness label on the task
+    a pull request closes or references must have been applied last by the owner, at any
+    priority and in any category, with no threshold variable set."""
+
+    BOT = "grok-conductor[bot]"
+
+    def _task(self, timeline, labels=None, **kwargs):
+        return FakeGitHub(issues={42: (labels or ready(priority="P3"), "OPEN")}, timelines={42: timeline}, **kwargs)
+
+    def _reference(self, timeline, labels=None):
+        return self._task(timeline, labels, body="Refs #42", files=["docs/adr/0008-example.md"])
+
+    def test_bot_ready_is_rejected_in_manual(self):
+        fake = self._task([labeled("status:ready", self.BOT)])
+        output = self.assertRejected(fake, f"'status:ready' was last applied by {self.BOT}", APPROVAL_MODE="manual")
+        self.assertIn("must be readied by the owner (owner)", output)
+        self.assertIn("approval mode is manual", output)
+        self.assertIn("ADR 0009", output)
+
+    def test_owner_ready_is_accepted_in_manual(self):
+        fake = self._task([labeled("status:ready", "owner")])
+        output = self.assertAccepted(fake, APPROVAL_MODE="manual")
+        self.assertIn("readied by the owner owner (approval mode manual)", output)
+        self.assertEqual(fake.timeline_calls(), [["gh", "api", "--paginate", "--slurp", "repos/owner/repo/issues/42/timeline"]])
+
+    def test_the_same_bot_ready_within_the_cap_still_passes_in_auto(self):
+        # Flipping the variable is the switch: the identical record passes in auto and fails in manual.
+        timeline = [labeled("status:ready", self.BOT)]
+        fake = self._task(timeline)
+        self.assertAccepted(fake, APPROVAL_MODE="auto", PRIORITY_CAP="P2", OWNER_CATEGORIES="kind:security")
+        self.assertEqual(fake.timeline_calls(), [])
+        self.assertRejected(self._task(timeline), "last applied by", APPROVAL_MODE="manual", PRIORITY_CAP="P2", OWNER_CATEGORIES="kind:security")
+
+    def test_the_last_labeled_event_counts_in_manual(self):
+        timeline = [labeled("status:ready", "owner"), {"event": "unlabeled", "label": {"name": "status:ready"}, "actor": {"login": "owner"}},
+                    labeled("status:ready", self.BOT)]
+        self.assertRejected(self._task(timeline), f"last applied by {self.BOT}", APPROVAL_MODE="manual")
+        self.assertAccepted(self._task(list(reversed(timeline))), APPROVAL_MODE="manual")
+
+    def test_owner_login_comparison_ignores_case_in_manual(self):
+        self.assertAccepted(self._task([labeled("status:ready", "Owner")]), APPROVAL_MODE="manual", OWNER_LOGIN="OWNER")
+
+    def test_record_only_reference_with_a_bot_ready_is_rejected_in_manual(self):
+        fake = self._reference([labeled("status:ready", self.BOT)])
+        output = self.assertRejected(fake, f"'status:ready' was last applied by {self.BOT}", APPROVAL_MODE="manual")
+        self.assertIn("Record-only pull request", output)
+
+    def test_record_only_reference_with_an_owner_ready_is_accepted_in_manual(self):
+        fake = self._reference([labeled("status:ready", "owner")])
+        self.assertAccepted(fake, APPROVAL_MODE="manual")
+        self.assertEqual(len(fake.timeline_calls()), 1)
+
+    def test_referenced_tracking_record_without_a_ready_label_reads_no_timeline(self):
+        fake = self._reference([], labels=["kind:tracking"])
+        self.assertAccepted(fake, APPROVAL_MODE="manual")
+        self.assertEqual(fake.timeline_calls(), [])
+
+    def test_timeline_lookup_failure_fails_closed_in_manual(self):
+        fake = self._task(ApiError(1, "gh: Resource not accessible by integration (HTTP 403)\n"))
+        output = self.assertRejected(fake, "Could not read the timeline of task #42", APPROVAL_MODE="manual")
+        self.assertIn("HTTP 403", output)
+
+    def test_timeline_without_a_ready_event_fails_closed_in_manual(self):
+        fake = self._task([labeled("P3", "owner"), {"event": "commented", "actor": {"login": "owner"}}])
+        self.assertRejected(fake, "has no 'labeled' event for 'status:ready'", APPROVAL_MODE="manual")
+
+    def test_ready_event_without_an_actor_fails_closed_in_manual(self):
+        fake = self._task([{"event": "labeled", "label": {"name": "status:ready"}, "actor": None}])
+        self.assertRejected(fake, "last applied by an unknown actor", APPROVAL_MODE="manual")
+
+    def test_unready_task_reports_the_missing_label_without_reading_the_timeline(self):
+        fake = self._task([labeled("status:ready", self.BOT)], labels=["P3", "kind:chore"])
+        self.assertRejected(fake, "missing the 'status:ready' label", APPROVAL_MODE="manual")
+        self.assertEqual(fake.timeline_calls(), [])
+
+    def test_empty_owner_login_is_rejected_in_manual(self):
+        self.assertRejected(FakeGitHub(), "CONDUCTOR_OWNER_LOGIN is empty", APPROVAL_MODE="manual", OWNER_LOGIN="")
+
+    def test_custom_ready_label_is_the_one_attributed(self):
+        labels = ["P3", "kind:chore", "go"]
+        self.assertRejected(self._task([labeled("go", self.BOT), labeled("status:ready", "owner")], labels=labels),
+                            "'go' was last applied by", APPROVAL_MODE="manual", READY_LABEL="go")
+        self.assertAccepted(self._task([labeled("go", "owner")], labels=labels), APPROVAL_MODE="manual", READY_LABEL="go")
