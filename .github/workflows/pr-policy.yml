@@ -62,6 +62,7 @@ name: PR policy
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
+  workflow_call:
 concurrency:
   group: pr-policy-${{ github.event.pull_request.number }}
   cancel-in-progress: true

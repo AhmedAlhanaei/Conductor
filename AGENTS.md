@@ -99,7 +99,9 @@ covers unless its scope or risk changed.
 - When the last child of a tracking or top-level parent closes, the Planner posts a handoff
   report as the parent's closing comment: every child with its pull request and merge SHA, the
   verification evidence, decisions taken, anything found and left, and the next record to
-  open. In `auto` the Planner then closes the parent; in `manual` the owner does.
+  open. The report names any push-budget overrun and classifies each child's pull request as
+  accepted (merged and not reverted within 14 days), rejected (closed unmerged or reverted)
+  or pending. In `auto` the Planner then closes the parent; in `manual` the owner does.
 - Decisions go to the record or to `docs/adr/` (an amended ADR carries an "Amended by" line,
   never a rewrite); pitfalls go to this page or the record. The issue and the pull request are
   the checkpoint; private chat does not migrate, and project memory may remind but is not the
@@ -136,7 +138,9 @@ labelled together with one comment naming the round.
 1. Commit everything that belongs to the task; push work in progress to the branch on long
    tasks, never to a pull request. Open the pull request once, after the verification
    contract passes locally: every push to an open pull request runs every check, billed by
-   the minute, so push again only for a review finding or a red check.
+   the minute, so push again only for a review finding or a red check. A red check is
+   reproduced and fixed locally before the next push, and fixes for several findings go in
+   one push.
 2. Run the verification contract below on the exact head and record command, cwd, result
    and tested SHA. A claim without the recorded command is not verification.
 3. Open the pull request against the integration branch from the repository template:
@@ -184,8 +188,9 @@ Run from the repository root on the exact head before any pull request or comple
 | Workflow lint | `actionlint`, `.` (actionlint 1.7.7, as `verify` installs it) | no output, exit 0 |
 | `linked-task` checker tests | `python3 -m unittest discover -s tests -p 'test_*.py'`, `.` | `OK`, exit 0 |
 
-A project created from this template replaces these rows with its own commands; `verify` in
-`.github/workflows/ci.yml` runs the same rows in CI.
+A project created from this template replaces these rows with its own commands and keeps the
+cost defaults listed in the `ci.yml` header; `verify` in `.github/workflows/ci.yml` runs the
+same rows in CI.
 
 ## When something is missing
 

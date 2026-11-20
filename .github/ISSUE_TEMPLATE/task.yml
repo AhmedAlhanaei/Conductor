@@ -80,7 +80,7 @@ body:
     id: boundaries
     attributes:
       label: Allowed paths, services and actions
-      description: Owned files or components, read-only context, data classification, environment, budget.
+      description: Owned files or components, read-only context, data classification, environment, budget. The budget names the pushes allowed to the open pull request (default 2).
     validations:
       required: true
   - type: textarea
