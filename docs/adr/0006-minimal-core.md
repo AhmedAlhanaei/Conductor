@@ -11,6 +11,7 @@
   and the two approval modes those records define stand.
 - Roles: decision grilled by the Planner (project coordinator); this record written by the
   Implementer (a project thread)
+- Amended by: ADR 0010 (adopters call `pr-policy.yml` at a tag instead of copying it)
 
 ## Context
 

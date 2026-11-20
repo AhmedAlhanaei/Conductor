@@ -1,10 +1,13 @@
 # ADR 0010: adopters call `pr-policy.yml` at a tag instead of copying it
 
-- Status: Proposed (the owner accepts or rejects it; nothing here is in force)
+- Status: Accepted (the owner's "Accept adr", 2026-11-20 23:54 UTC, on the project thread
+  that ran the spike; logged on #115 and applied under #121). Proposed from 2026-11-20
+  12:16 UTC until then
 - Date: 2026-11-20
 - Deciders: repository owner
 - Task record: #115 (Backlog #66 line X5 with L14 folded in)
-- Amends: nothing. ADR 0006 keeps "copy the two workflows" until the owner accepts this record
+- Amends: ADR 0006, in one point: adopters call `pr-policy.yml` at a tag instead of copying
+  it. `ci.yml` is still copied, and everything else in ADR 0006 stands
 - Roles: spike run and this record written by the Implementer (a project thread)
 
 ## Context
@@ -135,8 +138,25 @@ permissions:
   pull-requests: read
 jobs:
   linked-task:
-    uses: alhanaei/Conductor/.github/workflows/pr-policy.yml@v1
+    uses: AhmedAlhanaei/Conductor/.github/workflows/pr-policy.yml@v1
 ```
 
 For the README checklist, if accepted: "Add the eleven-line caller above as
 `.github/workflows/pr-policy.yml`, then require the check `linked-task / linked-task`."
+
+## Acceptance note, 2026-11-20
+
+Added under #121 when the owner accepted this record; the text above is otherwise as proposed.
+
+- The repository moved under the organization `AhmedAlhanaei` on 2026-11-20, after the spike
+  and before any adopter switched, as recommendation 5 asks. Finding (g) applied to this
+  record itself: the adopter's caller above now reads `AhmedAlhanaei/Conductor/...`. The
+  spike caller under Context keeps `alhanaei/Conductor/...`, because that is the path that
+  was run.
+- Recommendation 4 says `v1` goes on "the merge commit of this record's pull request", which
+  was 47f53a7 and carries the old path in this file. The owner creates `v1` on the merge
+  commit of the pull request that closes #121, or on a later head of `main`, not on 47f53a7.
+  Until the tag exists the caller's ref does not resolve.
+- "Not decided here" is settled for ADR 0006 and the README by #121: ADR 0006 carries the
+  "Amended by" line and the README checklist carries the caller and the check name. The three
+  `unknown` answers stay open until the first adopter switches.

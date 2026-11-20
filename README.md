@@ -55,6 +55,23 @@ runs the contract on the exact head, opens one pull request from the
 1. Create the repository from this one with GitHub's **Use this template**.
 2. Edit the first section of `AGENTS.md` to the project's facts, and its verification
    contract to the project's own commands.
+   Replace the copied `.github/workflows/pr-policy.yml` with this caller, so the project
+   always runs the current checker ([ADR 0010](docs/adr/0010-reusable-workflows.md)); keep
+   the copied `ci.yml` and replace its rows:
+
+   ```yaml
+   name: PR policy
+   on:
+     pull_request:
+       types: [opened, edited, synchronize, reopened]
+   permissions:
+     contents: read
+     issues: read
+     pull-requests: read
+   jobs:
+     linked-task:
+       uses: AhmedAlhanaei/Conductor/.github/workflows/pr-policy.yml@v1
+   ```
 3. In GitHub, repository Settings, Secrets and variables, Actions, Variables: set
    `CONDUCTOR_APPROVAL_MODE` to `manual` or `auto`, and `CONDUCTOR_BACKLOG_REVIEW_ISSUE` to
    the pinned backlog issue if you use the weekly report. `CONDUCTOR_REVIEW_REQUIRED_LABEL`
@@ -68,7 +85,9 @@ runs the contract on the exact head, opens one pull request from the
    (ADR 0008). Conductor itself sets `P2` and `kind:security`.
 4. In GitHub, repository Settings, Branches: protect the default branch with a required
    pull request, "Do not allow bypassing" on, approvals off, required checks `verify` and
-   `linked-task`. In Settings, General, Pull Requests: tick **Allow auto-merge** for `auto`.
+   `linked-task / linked-task` (the name the caller in step 2 reports under; only Conductor
+   itself, which runs the workflow directly, requires the bare `linked-task`). In Settings,
+   General, Pull Requests: tick **Allow auto-merge** for `auto`.
 5. Create the labels the policy uses: priorities `P0` to `P3`, `blocked:owner`, categories
    `kind:*`, `kind:tracking`, `status:ready`, and optionally `agent:claude`, `agent:codex`,
    `agent:gemini`, `agent:grok`.
