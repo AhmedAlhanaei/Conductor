@@ -18,6 +18,10 @@ One row per numbered acceptance criterion of the record, filled before the pull 
 | --- | --- | --- | --- |
 | 1. | | | |
 
+- Pushes to the open pull request: <n> of <budget from the record, default 2>
+- Billed Actions minutes for this pull request: <n, or "0, public repository">
+- Lead time from `status:ready` to merge: <filled in the milestone comment when not yet known>
+
 ## Merge danger
 
 - Door: two-way (one revert commit undoes it, no data or external effect) or one-way (migration, published artifact, external call, deletion, credential or access change). State which and why.
