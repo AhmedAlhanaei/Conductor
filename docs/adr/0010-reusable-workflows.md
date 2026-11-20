@@ -101,6 +101,42 @@ created, move this repository first and write the callers once.
 
 ## Recommendation
 
-Pending. The record's stop condition holds a recommendation back while (a) means adopters
-must edit branch protection; the owner's answer is recorded here before this record is
-proposed for acceptance.
+The owner lifted the stop condition on 2026-11-20 at 12:14 UTC, on the project thread's
+decision card: recommend calling `pr-policy.yml` only, with the one-time rename of the
+required check accepted.
+
+1. Adopters call `pr-policy.yml` at the tag `v1` and stop copying it. The checker, its tests
+   and its variables stay in this repository; the adopter keeps its `CONDUCTOR_*` variables.
+2. Adopters keep copying `ci.yml` and replacing its rows, as today (d).
+3. Each adopter's owner renames the required check once, from `linked-task` to
+   `linked-task / linked-task`, in the same sitting as the caller's merge (a).
+4. The owner creates `v1` on the merge commit of this record's pull request and moves it when
+   the checker changes (e). A checker change is tested here by `verify` before the tag moves.
+5. If this repository moves under an organization, it moves before the first adopter
+   switches, or every caller is edited again after the move (g).
+6. Conductor's own pull requests keep triggering both workflows directly; nothing changes
+   here but the two `workflow_call:` lines, which are inert until something calls them.
+
+Not decided here: amending ADR 0006 and the README adoption checklist, which follow the
+owner's acceptance as their own record; and the three `unknown` answers (a tag ref,
+a caller without `permissions:`, organization variables), which the first adopter's switch
+answers.
+
+The adopter's whole `.github/workflows/pr-policy.yml`:
+
+```yaml
+name: PR policy
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+jobs:
+  linked-task:
+    uses: alhanaei/Conductor/.github/workflows/pr-policy.yml@v1
+```
+
+For the README checklist, if accepted: "Add the eleven-line caller above as
+`.github/workflows/pr-policy.yml`, then require the check `linked-task / linked-task`."
