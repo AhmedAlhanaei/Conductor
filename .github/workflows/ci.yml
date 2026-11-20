@@ -1,3 +1,13 @@
+# Cost defaults. A project that replaces the steps below with its own keeps these:
+# - Trigger: pull_request only. No push trigger on the integration branch; add a weekly
+#   schedule if the project wants `main` proven.
+# - Concurrency: one group per pull request, cancel-in-progress, so a new push stops the
+#   superseded run.
+# - A timeout on every job.
+# - Linux runners unless the task record names another: macOS bills 10x, Windows 2x.
+# - Heavy steps gated on changed paths at step level, never by a workflow-level path filter,
+#   so the required check still reports.
+# - Jobs that run about a minute folded into one: each job bills a rounded-up minute.
 name: CI
 on:
   pull_request:
