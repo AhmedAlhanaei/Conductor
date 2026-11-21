@@ -12,6 +12,8 @@
   the owner's login, and so what its actor test can see)
 - Amended by: correction note of 2026-11-20 (#113), at the end of this record: §5 was not
   what `linked-task` enforced and §6 contradicted it; the check now enforces §5
+- Amended by: ADR 0011 (2026-11-21): `agent:grok` is unused; Grok reviews the pull requests in
+  Review that have no review of the head, not those whose checks are green
 - Roles: decision grilled by the Planner (project coordinator); this record written by the
   Implementer (a project thread)
 

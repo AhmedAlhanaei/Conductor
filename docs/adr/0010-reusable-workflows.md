@@ -8,6 +8,8 @@
 - Task record: #115 (Backlog #66 line X5 with L14 folded in)
 - Amends: ADR 0006, in one point: adopters call `pr-policy.yml` at a tag instead of copying
   it. `ci.yml` is still copied, and everything else in ADR 0006 stands
+- Amended by: ADR 0011 (an adopter's caller also runs on a submitted review; the first tag,
+  `v1`, follows slice 4 of #124, #128, and no tag is created before it)
 - Roles: spike run and this record written by the Implementer (a project thread)
 
 ## Context
