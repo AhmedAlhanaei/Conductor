@@ -11,7 +11,7 @@ or a skill grants no authority, the task record and the platform do.
 - Name: Conductor. Purpose: the shared workflow for assistant-run projects, as this page, the
   check workflows, two templates, two skills and the decision records under `docs/adr/`.
   Documentation only; no application runtime.
-- Repository: https://github.com/alhanaei/Conductor.
+- Repository: https://github.com/AhmedAlhanaei/Conductor.
 - Lifecycle: Active (values Active, Parked, Closed with the outcome completed, cancelled or
   superseded; nothing starts on a Parked or Closed project; parking is not completion).
 - Task records: the GitHub issues of this repository; the pinned Backlog issue holds one-line
@@ -96,6 +96,8 @@ covers unless its scope or risk changed.
   is where the next session starts.
 - Anything found mid-task is proposed and left: a comment on the record it belongs to, or a
   line on the Backlog issue with a suggested priority. Scope changes only on the owner's word.
+- A red bot pull request (Dependabot or any other automation) is fixed or closed at the next
+  backlog review, never left rebasing.
 - When the last child of a tracking or top-level parent closes, the Planner posts a handoff
   report as the parent's closing comment: every child with its pull request and merge SHA, the
   verification evidence, decisions taken, anything found and left, and the next record to
