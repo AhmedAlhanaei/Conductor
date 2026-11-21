@@ -10,6 +10,8 @@
   word)
 - Amends: ADR 0008 (the identity its §5 leaves open: who applies `status:ready` other than
   the owner's login, and so what its actor test can see)
+- Amended by: correction note of 2026-11-20 (#113), at the end of this record: §5 was not
+  what `linked-task` enforced and §6 contradicted it; the check now enforces §5
 - Roles: decision grilled by the Planner (project coordinator); this record written by the
   Implementer (a project thread)
 
@@ -112,3 +114,26 @@ and remove the "Amended by" line from ADR 0008.
 #108, its Gate Ready comment and the `grok-conductor[bot]` comment of 2026-11-07 21:07 UTC;
 the owner's "Accept the recommendation. And ready 108" (2026-11-07 21:32 UTC) in the project
 thread "Give assistants their own GitHub app identity"; ADR 0008 §5; Backlog #66 line T1.
+
+## Correction note, 2026-11-20 (#113)
+
+The text above stands as decided; this note corrects two statements that did not match the
+check.
+
+- §5 said that in `manual` "`linked-task` refuses the pull request" of a Grok Ready. Until
+  #113 it did not: the actor test ran only in `auto` and only above the thresholds of ADR
+  0008, so in `manual` the timeline was never read and a `status:ready` applied by any
+  identity passed. `linked-task` now enforces §5: in `manual` the last `labeled` event for the
+  readiness label on the task a pull request closes, or references on the record-only `Refs`
+  path, must name `CONDUCTOR_OWNER_LOGIN` (default the repository owner), at any priority and
+  in any category. A failed timeline lookup, or a timeline with no such event, fails the
+  check. A referenced tracking record that carries no readiness label has no Ready to
+  attribute and is not read.
+- §6 said "`linked-task` needs no change", and the Consequences listed "`linked-task` code and
+  tests" as unchanged. Both held for `auto` only and are superseded for `manual` by the
+  change above. The rest of §6 stands: in `auto` a record within the cap still never reads
+  the timeline, and there the page rule of §3 is the whole of the enforcement.
+- Limits that remain: the test sees only what GitHub records, so a Ready applied through a
+  connector that acts as the owner, or by a session on the owner's login, reads as the
+  owner's (§2 and ADR 0008 §5); the parent record's readiness actor is not tested in either
+  mode (found and left on #99). No third mode value and no new repository variable.
