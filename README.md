@@ -97,10 +97,131 @@ runs the contract on the exact head, opens one pull request from the
 A policy change is one commit to `AGENTS.md`; `git log -1 -- AGENTS.md` names the revision an
 assistant read.
 
+## Adopt into an existing repository
+
+For a repository that already has code, history and its own CI. It is a checklist: nothing is
+generated, and every step is a file in one pull request or a GitHub setting. `OWNER/REPO` is
+the adopting repository and `ORG` its organization, if it has one. Steps 2 to 4 are the
+owner's, in the browser.
+
+1. **Get the core files**, in one pull request in the adopting repository
+   (`https://github.com/OWNER/REPO/pulls`). Copy `AGENTS.md`, `CLAUDE.md`,
+   `.github/ISSUE_TEMPLATE/task.yml` and `.github/pull_request_template.md`. Do not copy
+   `pr-policy.yml`: add the caller from step 2 of [Try it](#try-it), which runs the checker
+   at the tag `v1` ([ADR 0010](docs/adr/0010-reusable-workflows.md)). Keep the repository's
+   own CI and give it one job named `verify` that runs its verification contract, with the
+   cost defaults from the header of [`ci.yml`](.github/workflows/ci.yml); copy `ci.yml` and
+   replace its rows only when there is no CI yet. `backlog-review.yml` is optional. In the
+   same pull request, edit the first section of `AGENTS.md`, "What this project is", to the
+   project's facts, and the table under "Verification contract" to its own commands. This is
+   the last pull request merged without the checks.
+2. **Create the labels** in GitHub, repository Issues, Labels
+   (`https://github.com/OWNER/REPO/labels`): `P0` to `P3`, `blocked:owner`, one `kind:*`
+   per category (`kind:feature`, `kind:bug`, `kind:docs`, `kind:chore`, `kind:security`
+   and so on), `kind:tracking`, `status:ready`, `review:required`, and optionally the
+   `agent:*` labels.
+3. **Set the variables** in GitHub, repository Settings, Secrets and variables, Actions,
+   Variables tab (`https://github.com/OWNER/REPO/settings/variables/actions`); step 3 of
+   [Try it](#try-it) says what each one does. In an organization the `CONDUCTOR_*` variables
+   may instead be set once at organization scope
+   (`https://github.com/organizations/ORG/settings/variables/actions`) and are inherited by
+   every repository the variable is shared with; a repository variable of the same name
+   overrides it. Label names, the priority cap, the owner-only categories and the owner's
+   login suit the organization; `CONDUCTOR_APPROVAL_MODE` and
+   `CONDUCTOR_BACKLOG_REVIEW_ISSUE` belong to each repository. A repository owned by an
+   organization sets `CONDUCTOR_OWNER_LOGIN` to the owner's own login: unset, it falls back
+   to the organization's name, which never applies a label, so every task above a threshold
+   is refused. Climb the approval modes as a ladder, one rung at a time:
+   1. `CONDUCTOR_APPROVAL_MODE=manual` (or unset): every gate is the owner's.
+   2. `auto` with `CONDUCTOR_ASSISTANT_PRIORITY_CAP=P3`: green pull requests merge by
+      themselves, and the owner still readies every sub-issue above `P3`.
+   3. The cap raised to `P2`, then further, as the merged pull requests earn it.
+4. **Protect the default branch** once the pull request of step 1 has merged and both checks
+   have reported on it (GitHub only offers checks it has seen). In GitHub, repository
+   Settings, Branches (`https://github.com/OWNER/REPO/settings/branches`): require a pull
+   request, approvals off, "Do not allow bypassing the above settings" on, required checks
+   `verify` and `linked-task / linked-task`. In GitHub, repository Settings, General, Pull
+   Requests (`https://github.com/OWNER/REPO/settings`): tick **Allow squash merging** and,
+   for `auto`, **Allow auto-merge**.
+5. **Give bot pull requests the cheap default.** Every push to a pull request runs every
+   check, and a bot rebases its pull requests whenever the default branch moves. If the
+   repository uses Dependabot, enable it in GitHub, repository Settings, Advanced Security
+   (`https://github.com/OWNER/REPO/settings/security_analysis`) and add
+   `.github/dependabot.yml` with one block like this per ecosystem:
+
+   ```yaml
+   version: 2
+   updates:
+     - package-ecosystem: "github-actions"   # repeat for pip, npm and so on
+       directory: "/"
+       schedule:
+         interval: "monthly"
+       open-pull-requests-limit: 2           # version updates; security updates are not counted
+       groups:
+         minor-and-patch:
+           applies-to: version-updates
+           update-types: ["minor", "patch"]
+         security:
+           applies-to: security-updates
+           patterns: ["*"]
+   ```
+
+   That is at most two open version-update pull requests per ecosystem, minor and patch
+   updates in one of them, and the security updates of an ecosystem in one more. A bot pull
+   request names no task, so `linked-task` holds it until the owner gives it one; a red one
+   is fixed or closed at the next backlog review, never left rebasing
+   ([Task records](AGENTS.md#task-records)).
+6. **Connect the assistants**: paste `AGENTS.md` into the project instructions where the
+   assistant has them and enable the two skills on the account, as in step 6 of
+   [Try it](#try-it). Then file the first task from the form and let one pull request close
+   it.
+
+## What is enforced, and what is trust only
+
+Every rule on [the page](AGENTS.md), and what holds it when a session ignores the page. Each
+row was read against [`pr-policy.yml`](.github/workflows/pr-policy.yml) and
+[`ci.yml`](.github/workflows/ci.yml). "Trust only" means nothing in GitHub stops a session
+that breaks the rule; the record, the pull request and the review are where it shows.
+
+| Rule on the page | Enforced by |
+| --- | --- |
+| A pull request closes exactly one task | `linked-task` |
+| That task is open, with one priority, one category, and neither `blocked:owner` nor `kind:tracking` | `linked-task` |
+| That task carries `status:ready` (owner gate Ready) | `linked-task` |
+| A sub-issue's parent is open with a category and a priority, `blocked:owner` or `kind:tracking`; in `auto` the parent is Ready too | `linked-task` |
+| In `auto`, a task above the priority cap or in an owner-only category was readied by the owner | `linked-task`, when a threshold variable is set. It compares the login that last applied the label, so it cannot tell the owner from a session acting through the owner's account |
+| In `auto`, a pull request targets the integration branch; only the promotion targets the default branch | `linked-task` |
+| One branch, one head, one pull request; no second pull request at the same head | `linked-task` |
+| A `review:required` task holds the merge until the Review line names the head | `linked-task`. That the Reviewer is another runtime and read that head: trust only |
+| A pull request that changes only record paths (`docs/adr/`) may use `Refs #n` | `linked-task` |
+| A record with sub-issues gets `Refs #n`, not a closing keyword | Trust only, and outside record paths not followable: `linked-task` refuses a pull request without a closing keyword |
+| The verification contract passes on the head | `verify`, on the pull request head. Its whitespace row, `git diff --check`, compares a clean checkout with itself and cannot fail in CI |
+| Nothing lands on the default branch without a pull request and both checks green; no bypass; no force-push there | Branch protection |
+| A green pull request in `auto` squash-merges by itself | GitHub native (auto-merge), once a session arms it |
+| The branch is updated when `main` moved under the pull request | Trust only, unless branch protection requires branches to be up to date |
+| Merge by hand; mark a draft ready; approve as a merge authorization | Trust only. Branch protection limits a hand merge to a green pull request, and with approvals off an approval changes nothing |
+| Edit branch protection, required checks or variables | GitHub native (admin permission) for an assistant with its own identity; trust only for a session acting through the owner's account |
+| Skip, disable or quarantine a check to get green | Branch protection keeps the two check names required; a pull request that edits what `verify` runs is not detected: trust only |
+| The Ready facts are filled in | GitHub native (required fields of the task form) at filing; their content, and an issue filed without the form: trust only |
+| File recorded in the first comment; Ready applied with a comment naming the approving message; approval only from the owner's own words | Trust only |
+| `status:ready` on a top-level record is the owner's | Trust only below the thresholds |
+| Three levels; related work is a sub-issue; the Planner's closing report on the parent | Trust only |
+| Selection order; `agent:*` labels; claim, release and handoff comments; the milestone comment | Trust only |
+| One role per session; the Planner and the Reviewer never push; at most two threads in parallel | Trust only |
+| Stay inside the record's allowed paths; take exactly the task given; never widen scope | Trust only |
+| The push budget; a red check fixed locally before the next push; work in progress never pushed to a pull request | Trust only |
+| The verification ledger and the evidence table in the pull request body | Trust only (the template asks for them) |
+| The cost defaults of `ci.yml` (trigger, concurrency, timeout, runner) | Trust only (they are in the copied file; nothing checks they stay) |
+| A red bot pull request is fixed or closed at the next backlog review | Trust only |
+| No force-push or rewritten history on a task branch | Trust only |
+| No deploy, spend, credential or access change, non-public data, publishing outside GitHub, account rotation or credentials in files | Trust only |
+| Nothing starts on a Parked or Closed project, or on a record that is not Ready | Trust only at the start; `linked-task` stops the pull request of a record that is not Ready |
+| Scheduled checks only when asked; say what is missing and stop | Trust only |
+
 ## Status
 
 Lifecycle Active; approval mode `auto`; latest decision ADR 0009. Conductor runs itself with
-these rules: its [issues](https://github.com/alhanaei/Conductor/issues) are the task records
+these rules: its [issues](https://github.com/AhmedAlhanaei/Conductor/issues) are the task records
 and the pinned Backlog issue holds the proposals. Documentation only; no application runtime.
 It is deliberately small ([ADR 0006](docs/adr/0006-minimal-core.md)): the policy fits one page,
 and anything that would need a generator, a runtime or a second copy of the rules is out.
