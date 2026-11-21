@@ -10,6 +10,10 @@ is no application runtime: this repository is documentation, workflows, template
 It is for a solo owner or a small team who want several assistants to work the same backlog
 without a merge they did not decide, a task nobody filed, or a check nobody ran.
 
+The states a record passes through, what each waits for and who moves it are in one file,
+[`docs/lifecycle.md`](docs/lifecycle.md). It describes the model accepted on 2026-11-21,
+which the page does not state yet; its first lines say what is in force.
+
 ## How it works
 
 **Task records.** Every change starts from a GitHub issue filed from the
