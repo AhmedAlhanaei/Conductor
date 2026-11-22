@@ -1,0 +1,211 @@
+# Publishes one Codex Planner message as a comment by `codex-conductor[bot]` on an existing
+# issue of this repository (#134). Usage: docs/codex-planner-comments.md.
+#
+# A Codex session cannot hold the App key, so it asks for publication by dispatching this
+# workflow on `main` with three inputs; the key never leaves Actions. The run refuses unless
+# - the event is a manual dispatch of this repository's `main`,
+# - the effective Planner is Codex (repository variable CONDUCTOR_DEFAULT_PLANNER = codex),
+# - the actor and the triggering actor are the owner (CONDUCTOR_OWNER_LOGIN, else the
+#   repository owner), who is recorded in the comment as the requester,
+# - the App token belongs to `codex-conductor`,
+# - the target is an open issue of this repository, not a pull request and not a redirect.
+# The message is data: it reaches the script through the environment and GitHub through a
+# JSON body on stdin, never through a shell word or a workflow expression inside a script.
+# The request ID makes a retry safe: the same ID with the same issue and message returns the
+# comment already published, the same ID with another message fails, and nothing is posted
+# twice. The publisher is tested by tests/test_planner_comment.py, which executes this very
+# script with the gh calls replaced. Runs are serialized; each bills one rounded-up minute.
+name: Codex Planner comment
+run-name: Codex Planner comment on #${{ inputs.issue }} (${{ inputs.request_id }})
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Number of the open issue to comment on
+        required: true
+        type: string
+      request_id:
+        description: Stable request ID, 8 to 64 of A-Z a-z 0-9 . _ - (reuse it to retry)
+        required: true
+        type: string
+      message:
+        description: The Planner's message, Markdown, published as written
+        required: true
+        type: string
+
+permissions: {}
+concurrency:
+  group: codex-planner-comment
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      comment-url: ${{ steps.publish.outputs.comment-url }}
+      result: ${{ steps.publish.outputs.result }}
+    env:
+      EXPECTED_REPOSITORY: AhmedAlhanaei/Conductor
+      PLANNER: ${{ vars.CONDUCTOR_DEFAULT_PLANNER }}
+      OWNER_LOGIN: ${{ vars.CONDUCTOR_OWNER_LOGIN || github.repository_owner }}
+      ISSUE: ${{ inputs.issue }}
+      REQUEST_ID: ${{ inputs.request_id }}
+    steps:
+      # An early refusal, before any token exists. The publisher below repeats every one of
+      # these checks and is the tested authority.
+      - name: Refuse an unauthorized dispatch before minting a token
+        run: |
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
+          [[ "$GITHUB_REPOSITORY" == "$EXPECTED_REPOSITORY" ]]
+          [[ "$GITHUB_REF" == refs/heads/main ]]
+          [[ "$PLANNER" == codex ]]
+          [[ -n "$OWNER_LOGIN" && "${GITHUB_ACTOR,,}" == "${OWNER_LOGIN,,}" ]]
+          [[ "${GITHUB_TRIGGERING_ACTOR,,}" == "${OWNER_LOGIN,,}" ]]
+          [[ "$ISSUE" =~ ^[1-9][0-9]{0,8}$ ]]
+          [[ "$REQUEST_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{7,63}$ ]]
+
+      - name: Authenticate as the installed App
+        id: app
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
+        with:
+          client-id: ${{ vars.CODEX_CONDUCTOR_CLIENT_ID }}
+          private-key: ${{ secrets.CODEX_CONDUCTOR_PRIVATE_KEY }}
+          permission-issues: write
+
+      - name: Publish the Planner comment
+        id: publish
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          MESSAGE: ${{ inputs.message }}
+        shell: python
+        run: |
+          import hashlib
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+
+          APP = "codex-conductor"
+          BOT = APP + "[bot]"
+          MAX_MESSAGE = 60000
+          MARKER = re.compile(
+              r"<!-- conductor-planner-comment request-id=(\S+) sha256=([0-9a-f]{64}) requested-by=(\S+) -->\s*\Z"
+          )
+
+
+          def fail(reason):
+              # Reasons are fixed text plus validated values; the message is never echoed.
+              print(f"::error::{reason}")
+              sys.exit(1)
+
+
+          def gh(*args, stdin=None):
+              return subprocess.run(["gh", "api", *args], input=stdin, capture_output=True, text=True)
+
+
+          env = os.environ.get
+          repo = env("GITHUB_REPOSITORY", "")
+          owner = env("OWNER_LOGIN", "").strip().lower()
+          actor = env("GITHUB_ACTOR", "")
+          issue = env("ISSUE", "")
+          request_id = env("REQUEST_ID", "")
+          message = env("MESSAGE", "")
+
+          # Who may ask, and where from.
+          if env("GITHUB_EVENT_NAME") != "workflow_dispatch":
+              fail("refused: only a manual dispatch may publish a Planner comment")
+          if not repo or repo != env("EXPECTED_REPOSITORY"):
+              fail("refused: this workflow publishes only from its own repository")
+          if env("GITHUB_REF") != "refs/heads/main":
+              fail("refused: dispatch the workflow on main")
+          if env("PLANNER", "") != "codex":
+              fail("refused: role mismatch, the effective Planner (CONDUCTOR_DEFAULT_PLANNER) is not codex")
+          if not owner or actor.lower() != owner or env("GITHUB_TRIGGERING_ACTOR", "").lower() != owner:
+              fail("refused: the caller is not the owner (CONDUCTOR_OWNER_LOGIN); nothing was published")
+          if env("APP_SLUG") != APP:
+              fail(f"refused: role mismatch, the token does not belong to the {APP} App")
+
+          # What is asked.
+          if not re.fullmatch(r"[1-9][0-9]{0,8}", issue):
+              fail("refused: the issue input is not an issue number")
+          if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{7,63}", request_id):
+              fail("refused: the request ID must be 8 to 64 characters of A-Z a-z 0-9 . _ - and start with a letter or digit")
+          if not message.strip():
+              fail("refused: the message is empty")
+          if len(message) > MAX_MESSAGE:
+              fail(f"refused: the message is longer than {MAX_MESSAGE} characters")
+
+          # The target: an open issue of this repository, read as GitHub answers it.
+          endpoint = f"repos/{repo}/issues/{issue}"
+          answer = gh(endpoint)
+          if answer.returncode != 0:
+              fail(f"wrong target: issue {issue} could not be read in {repo}; nothing was published")
+          try:
+              target = json.loads(answer.stdout)
+              same = str(target.get("url", "")).lower().endswith(f"/{endpoint}".lower())
+              number, state, is_pull = target.get("number"), target.get("state"), "pull_request" in target
+          except (ValueError, AttributeError):
+              fail(f"wrong target: the answer for issue {issue} could not be read; nothing was published")
+          if not same or number != int(issue):
+              fail(f"wrong target: {issue} is not an issue of {repo} (moved or redirected); nothing was published")
+          if is_pull:
+              fail(f"wrong target: {issue} is a pull request, and pull requests are outside this workflow")
+          if state != "open":
+              fail(f"wrong target: issue {issue} is not open")
+
+          digest = hashlib.sha256(json.dumps([int(issue), message]).encode("utf-8")).hexdigest()
+
+          # A retry: has this request already been published here?
+          answer = gh("--paginate", "--slurp", f"{endpoint}/comments?per_page=100")
+          if answer.returncode != 0:
+              fail("the existing comments could not be read, so a duplicate cannot be ruled out; nothing was published")
+          try:
+              comments = [comment for page in json.loads(answer.stdout) for comment in page]
+              earlier = []
+              for comment in comments:
+                  user = comment.get("user") or {}
+                  found = MARKER.search(comment.get("body") or "")
+                  if user.get("login") == BOT and user.get("type") == "Bot" and found and found.group(1) == request_id:
+                      earlier.append((found.group(2), comment["html_url"]))
+          except (ValueError, AttributeError, KeyError, TypeError):
+              fail("the existing comments could not be read, so a duplicate cannot be ruled out; nothing was published")
+
+          result = "published"
+          if earlier:
+              if any(seen != digest for seen, _ in earlier):
+                  fail(f"conflict: request ID {request_id} was already published on issue {issue} with a different message; nothing was published")
+              result, url = "reused", earlier[0][1]
+          else:
+              run = f"{env('GITHUB_SERVER_URL', 'https://github.com')}/{repo}/actions/runs/{env('GITHUB_RUN_ID', '')}"
+              body = (
+                  f"{message}\n\n---\n"
+                  f"_Published for the Codex Planner by `{APP}`. Requested by `{actor}`, request `{request_id}`, [run]({run})._\n"
+                  f"<!-- conductor-planner-comment request-id={request_id} sha256={digest} requested-by={actor} -->"
+              )
+              answer = gh("--method", "POST", f"{endpoint}/comments", "--input", "-", stdin=json.dumps({"body": body}))
+              if answer.returncode != 0:
+                  fail("GitHub refused the comment; whether it was published is unknown, so retry with the same request ID")
+              try:
+                  posted = json.loads(answer.stdout)
+                  user = posted.get("user") or {}
+                  via = (posted.get("performed_via_github_app") or {}).get("slug")
+                  url = posted["html_url"]
+              except (ValueError, AttributeError, KeyError):
+                  fail("the comment was sent but GitHub's answer could not be read; retry with the same request ID")
+              if user.get("login") != BOT or user.get("type") != "Bot" or via != APP:
+                  fail(f"identity mismatch: GitHub attributes {url} to another author than {BOT}; stop and tell the owner")
+
+          if not re.fullmatch(r"https://[^\s]+", url):
+              fail("GitHub returned no usable comment permalink")
+          print(f"{result}: {url}")
+          with open(env("GITHUB_OUTPUT", os.devnull), "a", encoding="utf-8") as out:
+              out.write(f"comment-url={url}\nresult={result}\n")
+          with open(env("GITHUB_STEP_SUMMARY", os.devnull), "a", encoding="utf-8") as out:
+              out.write(
+                  f"Planner comment {result}: {url}\n\n"
+                  f"- Author verified: `{BOT}`\n- Requested by: `{actor}`\n"
+                  f"- Request ID: `{request_id}`\n- Issue: #{issue}\n- Payload SHA-256: `{digest}`\n"
+              )
