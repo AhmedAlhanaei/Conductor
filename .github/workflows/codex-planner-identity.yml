@@ -40,15 +40,15 @@ jobs:
           ISSUE: ${{ inputs.issue }}
         run: |
           [[ "$APP_SLUG" == codex-conductor ]]
-          issue="repos/$GITHUB_REPOSITORY/issues/$ISSUE"
-          gh api "$issue" | jq -e '(.pull_request == null) and (.title == "Test the Codex Planner GitHub App identity")' >/dev/null
+          endpoint="repos/$GITHUB_REPOSITORY/issues/$ISSUE"
+          gh api "$endpoint" | jq -e '(.pull_request == null) and (.title == "Test the Codex Planner GitHub App identity")' >/dev/null
           body='Codex Planner identity test. This comment verifies GitHub App authentication from Conductor Actions.'
-          existing=$(gh api --paginate "$issue/comments?per_page=100" | jq -rs --arg body "$body" \
+          existing=$(gh api --paginate "$endpoint/comments?per_page=100" | jq -rs --arg body "$body" \
             '[.[][] | select(.user.login == "codex-conductor[bot]" and .body == $body)][0].html_url // empty')
           if [[ -n "$existing" ]]; then
             echo "Previously verified comment: $existing" >> "$GITHUB_STEP_SUMMARY"
           else
-            result=$(gh api --method POST "$issue/comments" -f body="$body")
+            result=$(gh api --method POST "$endpoint/comments" -f body="$body")
             url=$(jq -er 'select(.user.login == "codex-conductor[bot]" and .user.type == "Bot") | .html_url' <<< "$result")
             echo "Verified comment: $url" >> "$GITHUB_STEP_SUMMARY"
           fi
