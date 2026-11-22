@@ -1,0 +1,54 @@
+name: Codex Planner identity test
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Number of the dedicated Codex Planner identity test issue
+        required: true
+        type: string
+
+permissions: {}
+concurrency: codex-planner-identity
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate dispatch
+        env:
+          PLANNER: ${{ vars.CONDUCTOR_DEFAULT_PLANNER }}
+          ISSUE: ${{ inputs.issue }}
+        run: |
+          [[ "$GITHUB_REPOSITORY" == AhmedAlhanaei/Conductor ]]
+          [[ "$GITHUB_REF" == refs/heads/main ]]
+          [[ "$PLANNER" == codex ]]
+          [[ "$ISSUE" =~ ^[1-9][0-9]*$ ]]
+
+      - name: Authenticate as the installed App
+        id: app
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
+        with:
+          client-id: ${{ vars.CODEX_CONDUCTOR_CLIENT_ID }}
+          private-key: ${{ secrets.CODEX_CONDUCTOR_PRIVATE_KEY }}
+          permission-issues: write
+
+      - name: Verify GitHub attribution on the test issue
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          ISSUE: ${{ inputs.issue }}
+        run: |
+          [[ "$APP_SLUG" == codex-conductor ]]
+          endpoint="repos/$GITHUB_REPOSITORY/issues/$ISSUE"
+          gh api "$endpoint" | jq -e '(.pull_request == null) and (.title == "Test the Codex Planner GitHub App identity")' >/dev/null
+          body='Codex Planner identity test. This comment verifies GitHub App authentication from Conductor Actions.'
+          existing=$(gh api --paginate "$endpoint/comments?per_page=100" | jq -rs --arg body "$body" \
+            '[.[][] | select(.user.login == "codex-conductor[bot]" and .body == $body)][0].html_url // empty')
+          if [[ -n "$existing" ]]; then
+            echo "Previously verified comment: $existing" >> "$GITHUB_STEP_SUMMARY"
+          else
+            result=$(gh api --method POST "$endpoint/comments" -f body="$body")
+            url=$(jq -er 'select(.user.login == "codex-conductor[bot]" and .user.type == "Bot") | .html_url' <<< "$result")
+            echo "Verified comment: $url" >> "$GITHUB_STEP_SUMMARY"
+          fi
