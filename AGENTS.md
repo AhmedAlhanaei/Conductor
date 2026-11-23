@@ -23,7 +23,7 @@ or a skill grants no authority, the task record and the platform do.
 
 ## Roles
 
-A session holds one role at a time and declares it in its claim comment.
+A session holds one role at a time.
 
 - Owner (human): readies top-level records, rejects records, sets priorities and queue order,
   merges promotions into the default branch, owns branch protection, required checks and
@@ -114,12 +114,11 @@ covers unless its scope or risk changed.
 - Selection: the highest open priority, oldest first within it. Labels, assignees and comments
   are descriptive, not locks; an ambiguous claim pauses conflicting writes. A missing update is
   stale or unknown, not proof the claimant has stopped.
-- A claim ends with a release comment naming the head and the next step. A record passes to
-  another session only after that release or the owner's reassignment; a session that changes
-  role releases first and claims again.
-- A session that ends before its task is done hands off on its record with the `task-finish`
-  skill: one comment with head, merged and unmerged work, blockers and the next step, which
-  is where the next session starts.
+- A session that stops without a pull request hands off on its record with the `task-finish`
+  skill: one comment with head, pushed and unpushed work, blockers and the next step. That
+  comment releases the record and is where the next session starts; a record without a pull
+  request passes to another session only after it or the owner's reassignment. A session
+  that opened a pull request posts no claim, release or handoff: the pull request says it.
 - Anything found mid-task is proposed and left: a comment on the record it belongs to, or a
   line on the Backlog issue with a suggested priority. Scope changes only on the owner's word.
 - A red bot pull request (Dependabot or any other automation) is fixed or closed at the next
@@ -155,8 +154,9 @@ labelled together with one comment naming the round.
    `auto`, refuse a record above the assistant priority cap or in an owner-only category whose
    `status:ready` is not the owner's, as Owner gates defines it; the owner's Ready is the
    missing fact. Refuse a record whose `agent:*` label names another assistant.
-2. Post the claim comment before changing anything: runtime, thread or session reference,
-   time, role, branch. If the record carries an unreleased claim by someone else, stop and ask.
+2. Post no claim comment, apply no label and assign nobody: the Planner's assignment of the
+   issue is the claim. If the record is already being worked elsewhere (an open pull request
+   closes it, or it is assigned to another identity), stop and ask.
 3. Branch from the integration branch. Record the baseline: base SHA, dirty state, known
    failures.
 4. Stay inside the record's allowed paths. Take exactly the task you were given.
@@ -187,11 +187,11 @@ labelled together with one comment naming the round.
    login>, reviewed SHA: <head SHA>`, written by the Reviewer after reading that head (ADR
    0007); any other record's review stays advisory: it follows the merge on `main`, by a
    runtime other than the Implementer's; findings become its sub-issues or Backlog lines.
-5. Post the milestone comment on the record: head SHA, checks, pull request, proposals, and
-   anything still unpushed or local before calling it shared. Post it also when context or
-   quota runs low, before the session ends. When stopping instead, post the blocker and the
-   next executable step and open no pull request; a finish without evidence on the exact
-   head is a stopped finish.
+5. Post no milestone comment: the pull request carries the head SHA, the checks and the
+   proposals. When stopping instead, also when context or quota runs low, open no pull
+   request and post one handoff comment on the record: the blocker, the next executable step
+   and anything still unpushed or local. A finish without evidence on the exact head is a
+   stopped finish.
 
 ## Never
 
