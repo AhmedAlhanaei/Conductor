@@ -77,6 +77,8 @@ runs the contract on the exact head, opens one pull request from the
    on:
      pull_request:
        types: [opened, edited, synchronize, reopened]
+     pull_request_review:
+       types: [submitted]
    permissions:
      contents: read
      issues: read
@@ -88,14 +90,16 @@ runs the contract on the exact head, opens one pull request from the
 3. In GitHub, repository Settings, Secrets and variables, Actions, Variables: set
    `CONDUCTOR_APPROVAL_MODE` to `manual` or `auto`, and `CONDUCTOR_BACKLOG_REVIEW_ISSUE` to
    the pinned backlog issue if you use the weekly report. `CONDUCTOR_REVIEW_REQUIRED_LABEL`
-   renames the label that holds a merge until the pull request records an independent
-   review of its head (default `review:required`, ADR 0007); leave it unset to keep the default.
+   renames the label that adds the review requirement to a task (default `review:required`,
+   ADR 0007); leave it unset to keep the default.
    In `auto`, `CONDUCTOR_ASSISTANT_PRIORITY_CAP` (default unset: no cap) is the highest
    priority an assistant may ready, `CONDUCTOR_OWNER_CATEGORIES` (default unset: none) lists
    the categories only the owner readies, and `CONDUCTOR_OWNER_LOGIN` (default the repository
    owner) is the login whose `status:ready` counts as the owner's; `linked-task` then holds a
    pull request whose task is above the cap or in the list until the owner has readied it
-   (ADR 0008). Conductor itself sets `P2` and `kind:security`.
+   (ADR 0008). In both modes the same two variables decide when a review is required: such a
+   task holds the merge until its head has a GitHub review that does not request changes,
+   with or without the label (ADR 0011). Conductor itself sets `P2` and `kind:security`.
 4. In GitHub, repository Settings, Branches: protect the default branch with a required
    pull request, "Do not allow bypassing" on, approvals off, required checks `verify` and
    `linked-task / linked-task` (the name the caller in step 2 reports under; only Conductor
@@ -205,7 +209,7 @@ that breaks the rule; the record, the pull request and the review are where it s
 | In `auto`, a task above the priority cap or in an owner-only category was readied by the owner | `linked-task`, when a threshold variable is set. It compares the login that last applied the label, so it cannot tell the owner from a session acting through the owner's account |
 | In `auto`, a pull request targets the integration branch; only the promotion targets the default branch | `linked-task` |
 | One branch, one head, one pull request; no second pull request at the same head | `linked-task` |
-| A `review:required` task holds the merge until the Review line names the head | `linked-task`. That the Reviewer is another runtime and read that head: trust only |
+| A task above the priority cap, in an owner-only category or labelled `review:required` holds the merge until its head has a submitted GitHub review that does not request changes; a push needs a new one | `linked-task`, which reads the pull request's reviews and runs again when one is submitted. A reviewer with its own login cannot be forged. A review from the author's login counts when it starts `Reviewer: <runtime>`, so that the Reviewer is another runtime than the Implementer, and read the head, is trust only |
 | A pull request that changes only record paths (`docs/adr/`) may use `Refs #n` | `linked-task` |
 | A parent never has a pull request of its own; its own work is a sub-issue | Trust only. `linked-task` does not look at whether the closed task has sub-issues |
 | The verification contract passes on the head | `verify`, on the pull request head. Its whitespace row, `git diff --check`, compares a clean checkout with itself and cannot fail in CI |

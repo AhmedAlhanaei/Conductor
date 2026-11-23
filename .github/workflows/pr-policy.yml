@@ -8,10 +8,22 @@
 # other lookup failure fails the check. The head commit must belong to this pull request
 # alone: a second open pull request at the same head, on any page of the commit's pull
 # request list, fails the check on both, because GitHub attaches check runs to commits and
-# one green run would let either merge. Every failure the checker can meet, a missing task
-# among them, is reported as one "::error::" line, never a traceback. The
+# one green run would let either merge. When the task requires a review, the pull request must
+# carry a native GitHub review of its head (ADR 0011): the check reads the submitted reviews
+# of the pull request, keeps those whose commit is the head, and passes when the newest one
+# that counts does not request changes. A review by the pull request author's own login
+# counts only when its text starts with "Reviewer: <runtime>"; a request for changes always
+# counts. Nothing in the pull request body records a review. The check also runs when a
+# review is submitted, so the review itself turns it green, and a new push turns it red
+# again. A review is required when the task carries a priority above
+# CONDUCTOR_ASSISTANT_PRIORITY_CAP, a label listed in CONDUCTOR_OWNER_CATEGORIES or the
+# review label, in both approval modes. Every failure the checker can meet, a missing task,
+# unreadable reviews or a missing head among them, is reported as one "::error::" line, never
+# a traceback, and fails the check. The
 # checker is tested by tests/test_pr_policy.py,
-# which executes this very script with the gh calls replaced. Label names come from
+# which executes this very script with the gh calls replaced. A project that calls this file
+# (ADR 0010) lists the same triggers in its caller, "pull_request_review" of type
+# "submitted" among them. Label names come from
 # repository variables so the project's own scale applies:
 #   CONDUCTOR_PRIORITY_LABELS   comma-separated, default "P0,P1,P2,P3"
 #   CONDUCTOR_BLOCKED_LABEL     default "blocked:owner"
@@ -38,20 +50,20 @@
 #                               the branch task pull requests land on; default the
 #                               repository's default branch
 #   CONDUCTOR_REVIEW_REQUIRED_LABEL
-#                               default "review:required" (ADR 0007). When the task a pull
-#                               request closes carries it, the check fails until the body's
-#                               "## Review" section has a line
-#                               "Reviewer: <runtime or login>, reviewed SHA: <40-hex>"
-#                               whose SHA is the pull request head; a new push turns it red
-#                               again until the line is updated
+#                               default "review:required" (ADR 0007, ADR 0011). It adds the
+#                               review requirement to a task the two thresholds below do
+#                               not already cover; removing it from a task they cover
+#                               changes nothing
 #   CONDUCTOR_ASSISTANT_PRIORITY_CAP
 #                               default unset (no cap). In auto (ADR 0008), the highest
 #                               priority an assistant may ready: a closed task whose priority
 #                               comes before the cap in CONDUCTOR_PRIORITY_LABELS must have
-#                               had its readiness label applied by the owner
+#                               had its readiness label applied by the owner. In both modes
+#                               such a task requires a review of the head
 #   CONDUCTOR_OWNER_CATEGORIES  comma-separated category labels, default unset (none). In
 #                               auto, a closed task carrying one of them must have had its
-#                               readiness label applied by the owner
+#                               readiness label applied by the owner. In both modes such a
+#                               task requires a review of the head
 #   CONDUCTOR_OWNER_LOGIN       default the repository owner: the login whose `labeled`
 #                               event on the issue timeline counts as the owner's Ready.
 #                               In auto with neither threshold set the timeline is never
@@ -62,6 +74,8 @@ name: PR policy
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
+  pull_request_review:
+    types: [submitted]
   workflow_call:
 concurrency:
   group: pr-policy-${{ github.event.pull_request.number }}
@@ -90,6 +104,7 @@ jobs:
       OWNER_CATEGORIES: ${{ vars.CONDUCTOR_OWNER_CATEGORIES }}
       OWNER_LOGIN: ${{ vars.CONDUCTOR_OWNER_LOGIN || github.repository_owner }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_AUTHOR: ${{ github.event.pull_request.user.login }}
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       BASE_REF: ${{ github.event.pull_request.base.ref }}
       HEAD_REF: ${{ github.event.pull_request.head.ref }}
@@ -118,7 +133,10 @@ jobs:
           # One branch, one head, one pull request. GitHub attaches check runs to commits, so a
           # second open pull request at the same head commit would let its green run satisfy
           # branch protection for this one (seen on #89 and #91).
-          pr_number, head_sha = os.environ["PR_NUMBER"], os.environ["HEAD_SHA"].lower()
+          pr_number, head_sha = os.environ["PR_NUMBER"], os.environ.get("HEAD_SHA", "").strip().lower()
+          if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+              print(f"::error::The event carries no pull request head SHA (got {head_sha!r}); the check needs the head to tell whose commit it is and which review covers it. Run it on a pull_request or pull_request_review event.")
+              sys.exit(1)
           # The list is paged (30 per page by default): read every page, or a second open pull
           # request past the first page would go unseen.
           run = subprocess.run(["gh", "api", "--paginate", "--slurp", f"repos/{repo}/commits/{head_sha}/pulls"], capture_output=True, text=True)
@@ -210,16 +228,53 @@ jobs:
                   sys.exit(1)
               return ((labelled[-1].get("actor") or {}).get("login") or "").strip()
 
+          def review_reasons(labels):
+              # Why the task requires a review of the head: the thresholds, in both approval
+              # modes, or the review label. Empty when no review is required.
+              reasons = threshold_reasons(labels)
+              if review_required in labels:
+                  reasons.append(f"it carries '{review_required}'")
+              return reasons
+
           def review_problem():
-              # The "## Review" section of the body, up to the next heading, must name the head.
-              section = re.search(r"^##\s+Review\s*$(.*?)(?=^##\s|\Z)", body, re.M | re.S)
-              lines = re.findall(r"^\s*(?:[-*]\s*)?Reviewer:\s*(.+?),\s*reviewed SHA:\s*([0-9a-fA-F]{40})\s*$", section.group(1) if section else "", re.M)
-              if not lines:
-                  return "no 'Reviewer: <runtime or login>, reviewed SHA: <40-hex>' line under '## Review' in the pull request body"
-              reviewers = [who.strip() for who, sha in lines if sha.lower() == head_sha]
-              if not reviewers:
-                  return f"the Review line names SHA {lines[-1][1]}, not the head {head_sha}; review the head and update the line"
-              print(f"Review of head {head_sha} recorded by {', '.join(reviewers)}.")
+              # The native reviews of the pull request, read in full. A review counts when it
+              # was submitted on the head; one by the pull request author's own login counts
+              # only when its text starts with "Reviewer: <runtime>", and a request for changes
+              # always counts. The newest review that counts decides. Any failure fails closed.
+              author = os.environ.get("PR_AUTHOR", "").strip().lower()
+              if not author:
+                  return "the event carries no pull request author to compare the reviewer's login against"
+              run = subprocess.run(["gh", "api", "--paginate", "--slurp", f"repos/{repo}/pulls/{pr_number}/reviews"], capture_output=True, text=True)
+              if run.returncode:
+                  detail = run.stderr.strip() or run.stdout.strip() or "no output"
+                  return f"could not read the reviews of the pull request (gh api exit {run.returncode}): {detail}. Check that the workflow token has pull-requests: read and that api.github.com is reachable, then re-run the check"
+              try:
+                  reviews = [review for page in json.loads(run.stdout) for review in page]
+                  counted, same_login, stale = [], 0, 0
+                  for index, review in enumerate(reviews):
+                      state = (review.get("state") or "").upper()
+                      if state not in ("APPROVED", "COMMENTED", "CHANGES_REQUESTED"):
+                          continue  # pending or dismissed: not a submitted verdict
+                      if (review.get("commit_id") or "").lower() != head_sha:
+                          stale += 1
+                          continue
+                      login = ((review.get("user") or {}).get("login") or "").strip()
+                      named = re.match(r"\s*Reviewer:[ \t]*\S", review.get("body") or "")
+                      if state != "CHANGES_REQUESTED" and (not login or (login.lower() == author and not named)):
+                          same_login += 1
+                          continue
+                      counted.append((review.get("submitted_at") or "", index, login or "an unknown login", state))
+              except (ValueError, TypeError, AttributeError) as error:
+                  return f"could not parse the reviews of the pull request ({type(error).__name__}: {error})"
+              if not counted:
+                  seen = f"{stale} of an earlier commit" if stale else "none submitted"
+                  if same_login:
+                      seen += f", {same_login} of the head by the pull request author's login without a first line 'Reviewer: <runtime>'"
+                  return f"no review of the head counts ({seen}); a Reviewer submits a review of {head_sha} on the pull request"
+              _, _, login, state = max(counted)
+              if state == "CHANGES_REQUESTED":
+                  return f"the newest review of the head, by {login}, requests changes; push the fix and have the new head reviewed, or have the reviewer review the head again"
+              print(f"Review of head {head_sha} by {login} ({state.lower().replace('_', ' ')}).")
               return None
 
           def labels_of(number):
@@ -271,11 +326,14 @@ jobs:
                   problems.append(f"task is {state.lower()}; a pull request closes an open task")
               if ready not in labels and (closing or tracking not in labels):
                   problems.append(f"missing the '{ready}' label (owner gate Ready)")
-              if review_required in labels:
+              why_review = review_reasons(labels)
+              if why_review:
                   problem = review_problem()
                   if problem:
                       failed = True
-                      print(f"::error::Task #{number} carries '{review_required}' and the pull request records no review of its head: {problem}")
+                      print(f"::error::Task #{number} requires a review (" + "; ".join(why_review) + f") and head {head_sha} has none that passes: {problem}")
+              else:
+                  print(f"Task #{number} requires no review of the head.")
               if owner_ready_only:
                   # Closing and record-only paths alike; a referenced tracking record that
                   # carries no readiness label has no Ready to attribute.

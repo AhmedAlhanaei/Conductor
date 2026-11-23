@@ -45,6 +45,7 @@ DEFAULT_ENV = {
     "OWNER_CATEGORIES": "",
     "OWNER_LOGIN": "owner",
     "HEAD_SHA": HEAD,
+    "PR_AUTHOR": "author",
 }
 
 
@@ -77,12 +78,14 @@ NO_PARENT = ApiError(1, "gh: Not Found (HTTP 404)\n", '{"message":"Not Found","s
 class FakeGitHub:
     """Stands in for `subprocess.run` and answers the `gh` calls the checker makes."""
 
-    def __init__(self, body="Closes #42", files=("src/app.py",), issues=None, parents=None, head_pulls=None, timelines=None):
+    def __init__(self, body="Closes #42", files=("src/app.py",), issues=None, parents=None, head_pulls=None, timelines=None, reviews=None):
         self.body = body
         self.files = list(files)
         # what `gh api repos/{repo}/commits/{sha}/pulls` answers for the head: a list of pull
         # requests, or an ApiError; by default this pull request alone
         self.head_pulls = [{"number": 7, "state": "open", "head": {"sha": HEAD}}] if head_pulls is None else head_pulls
+        # the commit the pull request head is at; a test moves it to stand for a new push
+        self.head = HEAD
         # issue number -> (labels, state)
         self.issues = dict(issues or {42: (["P2", "kind:chore", "status:ready"], "OPEN")})
         # issue number -> parent number, or an ApiError for the parent lookup; absent means 404
@@ -90,6 +93,10 @@ class FakeGitHub:
         # issue number -> list of timeline events (one page), or an ApiError; absent means the
         # owner applied every label the issue carries
         self.timelines = dict(timelines or {})
+        # what `gh api repos/{repo}/pulls/{n}/reviews` answers: a list of reviews in the
+        # order GitHub returns them (oldest first), an ApiError, or a raw string; by default
+        # the pull request has no review
+        self.reviews = [] if reviews is None else reviews
         self.calls = []
 
     def __call__(self, args, check=False, capture_output=False, text=False, **kwargs):
@@ -120,13 +127,20 @@ class FakeGitHub:
             labels, state = self.issues[number]
             return json.dumps({"labels": [{"name": name} for name in labels], "state": state})
         if args[0] == "api" and re.fullmatch(r"repos/owner/repo/commits/[0-9a-f]{40}/pulls", args[-1]):
-            assert args[-1].split("/")[4] == HEAD, "the lookup must use the pull request head"
+            assert args[-1].split("/")[4] == self.head, "the lookup must use the pull request head"
             assert args[1:3] == ["--paginate", "--slurp"], "the pull requests at the head must be read in full, as pages"
             if isinstance(self.head_pulls, ApiError):
                 raise self.head_pulls
             # --slurp: one array per page, 30 items each as the API pages by default
             pages = [self.head_pulls[i:i + PAGE] for i in range(0, len(self.head_pulls), PAGE)] or [[]]
             return json.dumps(pages)
+        if args[0] == "api" and args[-1] == f"repos/owner/repo/pulls/{DEFAULT_ENV['PR_NUMBER']}/reviews":
+            assert args[1:3] == ["--paginate", "--slurp"], "the reviews must be read in full, as pages"
+            if isinstance(self.reviews, ApiError):
+                raise self.reviews
+            if isinstance(self.reviews, str):
+                return self.reviews
+            return json.dumps([self.reviews[i:i + PAGE] for i in range(0, len(self.reviews), PAGE)] or [[]])
         match = re.fullmatch(r"repos/owner/repo/issues/(\d+)/parent", args[1]) if args[0] == "api" else None
         if match:
             parent = self.parents.get(int(match.group(1)), NO_PARENT)
@@ -143,6 +157,9 @@ class FakeGitHub:
                 raise timeline
             return json.dumps([timeline])  # --slurp: one array per page
         raise AssertionError(f"unexpected gh call: {args!r}")
+
+    def review_calls(self):
+        return [call for call in self.calls if call[0] == "gh" and call[1] == "api" and call[-1].endswith("/reviews")]
 
     def timeline_calls(self):
         return [call for call in self.calls if call[0] == "gh" and call[1] == "api" and call[-1].endswith("/timeline")]
@@ -161,6 +178,11 @@ def run_policy(fake, **env):
         else:
             raise AssertionError("the checker must end with sys.exit")
     return (0 if code is None else int(code)), output.getvalue()
+
+
+def review(login="grok-conductor[bot]", state="APPROVED", commit=HEAD, body="", at="2026-11-23T10:00:00Z"):
+    """One entry of the pull request reviews list, as the REST API returns it."""
+    return {"user": {"login": login}, "state": state, "commit_id": commit, "body": body, "submitted_at": at}
 
 
 def ready(*extra, priority="P2", category="kind:chore"):
@@ -339,23 +361,229 @@ class ParentTests(PolicyTest):
 
 
 class ReviewRequiredTests(PolicyTest):
-    def _labelled(self, body):
-        return FakeGitHub(body=body, issues={42: (ready("review:required"), "OPEN")})
+    """ADR 0011, #126: a review is a native GitHub review of the head, read from the pull
+    request's reviews. Nothing in the pull request body records one."""
 
-    def test_missing_review_line_is_rejected(self):
-        self.assertRejected(self._labelled("Closes #42\n\n## Review\n\n- Reviewer: <runtime or login>, reviewed SHA: <40-hex>\n"),
-                            "records no review of its head")
+    def _labelled(self, reviews=None, body="Closes #42"):
+        return FakeGitHub(body=body, issues={42: (ready("review:required"), "OPEN")}, reviews=reviews)
 
-    def test_review_line_naming_the_head_is_accepted(self):
-        output = self.assertAccepted(self._labelled(f"Closes #42\n\n## Review\n\n- Reviewer: Codex, reviewed SHA: {HEAD}\n"))
-        self.assertIn(f"Review of head {HEAD} recorded by Codex", output)
+    def _one_error_naming_the_head(self, output):
+        errors = [line for line in output.splitlines() if line.startswith("::error::")]
+        self.assertEqual(len(errors), 1, output)
+        self.assertIn(f"head {HEAD}", errors[0])
+        self.assertNotIn("Traceback", output)
 
-    def test_review_line_naming_a_stale_sha_is_rejected(self):
-        self.assertRejected(self._labelled(f"Closes #42\n\n## Review\n\n- Reviewer: Codex, reviewed SHA: {STALE}\n"),
-                            f"names SHA {STALE}, not the head {HEAD}")
+    def test_no_review_is_rejected_with_one_error_naming_the_head(self):
+        output = self.assertRejected(self._labelled(), "no review of the head counts (none submitted)")
+        self.assertIn("Task #42 requires a review (it carries 'review:required')", output)
+        self._one_error_naming_the_head(output)
 
-    def test_unlabelled_task_needs_no_review_line(self):
-        self.assertAccepted(FakeGitHub(body="Closes #42\n\n## Review\n\n- Reviewer: <runtime or login>, reviewed SHA: <40-hex>\n"))
+    def test_approving_review_of_the_head_is_accepted(self):
+        output = self.assertAccepted(self._labelled([review()]))
+        self.assertIn(f"Review of head {HEAD} by grok-conductor[bot] (approved)", output)
+
+    def test_comment_review_of_the_head_by_another_login_is_accepted(self):
+        output = self.assertAccepted(self._labelled([review(state="COMMENTED", body="No findings.")]))
+        self.assertIn("(commented)", output)
+
+    def test_body_review_line_is_no_longer_read(self):
+        body = f"Closes #42\n\n## Review\n\n- Reviewer: Codex, reviewed SHA: {HEAD}\n"
+        self._one_error_naming_the_head(self.assertRejected(self._labelled(body=body), "no review of the head counts"))
+
+    def test_review_of_an_earlier_commit_does_not_count(self):
+        output = self.assertRejected(self._labelled([review(commit=STALE)]), "no review of the head counts (1 of an earlier commit)")
+        self._one_error_naming_the_head(output)
+
+    def test_new_push_turns_the_check_red_again(self):
+        fake = self._labelled([review()])
+        self.assertAccepted(fake)
+        fake.head = "c" * 40
+        fake.head_pulls = [{"number": 7, "state": "open", "head": {"sha": fake.head}}]
+        output = self.assertRejected(fake, "no review of the head counts (1 of an earlier commit)", HEAD_SHA=fake.head)
+        self.assertIn(f"head {fake.head}", output)
+
+    def test_head_comparison_ignores_case(self):
+        self.assertAccepted(self._labelled([review(commit=HEAD.upper())]))
+
+    def test_request_for_changes_on_the_head_is_rejected(self):
+        output = self.assertRejected(self._labelled([review(state="CHANGES_REQUESTED")]),
+                                     "the newest review of the head, by grok-conductor[bot], requests changes")
+        self._one_error_naming_the_head(output)
+
+    def test_newest_review_of_the_head_decides(self):
+        approved_then_changes = [review(at="2026-11-23T10:00:00Z"), review(login="codex[bot]", state="CHANGES_REQUESTED", at="2026-11-23T11:00:00Z")]
+        self.assertRejected(self._labelled(approved_then_changes), "by codex[bot], requests changes")
+        changes_then_approved = [review(state="CHANGES_REQUESTED", at="2026-11-23T10:00:00Z"), review(at="2026-11-23T11:00:00Z")]
+        self.assertAccepted(self._labelled(changes_then_approved))
+
+    def test_request_for_changes_on_an_earlier_commit_does_not_hold_a_reviewed_head(self):
+        self.assertAccepted(self._labelled([review(state="CHANGES_REQUESTED", commit=STALE), review(at="2026-11-23T11:00:00Z")]))
+
+    def test_pending_and_dismissed_reviews_do_not_count(self):
+        self.assertRejected(self._labelled([review(state="PENDING"), review(state="DISMISSED")]), "no review of the head counts (none submitted)")
+
+    def test_author_login_review_without_the_reviewer_line_does_not_count(self):
+        output = self.assertRejected(self._labelled([review(login="author", state="COMMENTED", body="Looks fine to me.")]),
+                                     "1 of the head by the pull request author's login without a first line 'Reviewer: <runtime>'")
+        self._one_error_naming_the_head(output)
+
+    def test_author_login_review_starting_with_the_reviewer_line_counts(self):
+        output = self.assertAccepted(self._labelled([review(login="Author", state="COMMENTED", body="Reviewer: Codex\n\nNo findings.")]))
+        self.assertIn(f"Review of head {HEAD} by Author (commented)", output)
+
+    def test_reviewer_line_must_start_the_text_and_name_a_runtime(self):
+        for body in ("No findings.\nReviewer: Codex", "Reviewer:", "Reviewer:\nCodex", None):
+            with self.subTest(body=body):
+                self.assertRejected(self._labelled([review(login="author", state="COMMENTED", body=body)]), "no review of the head counts")
+
+    def test_author_login_reply_does_not_override_a_request_for_changes(self):
+        reviews = [review(state="CHANGES_REQUESTED", at="2026-11-23T10:00:00Z"), review(login="author", state="COMMENTED", at="2026-11-23T11:00:00Z")]
+        self.assertRejected(self._labelled(reviews), "requests changes")
+
+    def test_review_on_the_second_page_is_read(self):
+        reviews = [review(commit=STALE) for _ in range(PAGE)] + [review()]
+        self.assertAccepted(self._labelled(reviews))
+
+    def test_task_that_requires_no_review_reads_no_reviews(self):
+        fake = FakeGitHub(reviews=ApiError(1, "gh: must not be called\n"))
+        output = self.assertAccepted(fake)
+        self.assertIn("Task #42 requires no review of the head", output)
+        self.assertEqual(fake.review_calls(), [])
+
+    def test_custom_review_label_is_honoured(self):
+        fake = FakeGitHub(issues={42: (ready("needs-review"), "OPEN")})
+        self.assertRejected(fake, "it carries 'needs-review'", REVIEW_REQUIRED_LABEL="needs-review")
+
+    def test_record_only_reference_to_a_task_that_requires_review_needs_one(self):
+        fake = FakeGitHub(body="Refs #42", files=["docs/adr/0008-example.md"], issues={42: (ready("review:required"), "OPEN")})
+        self.assertRejected(fake, "no review of the head counts")
+        fake.reviews = [review()]
+        self.assertAccepted(fake)
+
+
+class ReviewRequirementTests(PolicyTest):
+    """#126 criterion 4: the check computes when a review is required. A priority above the
+    assistant cap or an owner-only category requires one in both approval modes, with or
+    without the review label; the label adds the requirement to any other task."""
+
+    CAPPED = dict(PRIORITY_CAP="P2", OWNER_CATEGORIES="kind:security")
+
+    def _task(self, labels, reviews=None):
+        return FakeGitHub(issues={42: (labels, "OPEN")}, reviews=reviews)
+
+    def test_priority_above_the_cap_requires_a_review_without_the_label_in_both_modes(self):
+        for mode in ("manual", "auto"):
+            for priority in ("P0", "P1"):
+                with self.subTest(mode=mode, priority=priority):
+                    output = self.assertRejected(self._task(ready(priority=priority)), "no review of the head counts", APPROVAL_MODE=mode, **self.CAPPED)
+                    self.assertIn(f"Task #42 requires a review (priority {priority} is above the assistant cap P2)", output)
+                    self.assertAccepted(self._task(ready(priority=priority), [review()]), APPROVAL_MODE=mode, **self.CAPPED)
+
+    def test_owner_only_category_requires_a_review_at_any_priority_in_both_modes(self):
+        for mode in ("manual", "auto"):
+            with self.subTest(mode=mode):
+                labels = ready(priority="P3", category="kind:security")
+                output = self.assertRejected(self._task(labels), "category kind:security is owner-only", APPROVAL_MODE=mode, **self.CAPPED)
+                self.assertIn("requires a review", output)
+                self.assertAccepted(self._task(labels, [review()]), APPROVAL_MODE=mode, **self.CAPPED)
+
+    def test_task_at_or_below_the_cap_requires_none_and_the_label_adds_it(self):
+        for mode in ("manual", "auto"):
+            for priority in ("P2", "P3"):
+                with self.subTest(mode=mode, priority=priority):
+                    fake = self._task(ready(priority=priority))
+                    self.assertAccepted(fake, APPROVAL_MODE=mode, **self.CAPPED)
+                    self.assertEqual(fake.review_calls(), [])
+                    self.assertRejected(self._task(ready("review:required", priority=priority)), "it carries 'review:required'", APPROVAL_MODE=mode, **self.CAPPED)
+
+    def test_cap_other_than_p2_moves_the_requirement(self):
+        self.assertAccepted(self._task(ready(priority="P1")), PRIORITY_CAP="P1")
+        self.assertRejected(self._task(ready(priority="P0")), "priority P0 is above the assistant cap P1", PRIORITY_CAP="P1")
+        self.assertRejected(self._task(ready(priority="P2")), "priority P2 is above the assistant cap P3", PRIORITY_CAP="P3")
+
+    def test_custom_priority_scale_orders_the_requirement(self):
+        scale = dict(PRIORITY_LABELS="urgent,normal,low", PRIORITY_CAP="normal")
+        self.assertRejected(self._task(ready(priority="urgent")), "priority urgent is above the assistant cap normal", **scale)
+        self.assertAccepted(self._task(ready(priority="normal")), **scale)
+
+    def test_cap_and_categories_unset_leave_only_the_label(self):
+        for mode in ("manual", "auto"):
+            with self.subTest(mode=mode):
+                fake = self._task(ready(priority="P0", category="kind:security"))
+                self.assertAccepted(fake, APPROVAL_MODE=mode)
+                self.assertEqual(fake.review_calls(), [])
+                self.assertRejected(self._task(ready("review:required", priority="P0")), "it carries 'review:required'", APPROVAL_MODE=mode)
+
+    def test_every_reason_is_named(self):
+        labels = ready("review:required", priority="P0", category="kind:security")
+        self.assertRejected(self._task(labels), "priority P0 is above the assistant cap P2; category kind:security is owner-only; it carries 'review:required'", **self.CAPPED)
+
+
+class ReviewFailureTests(PolicyTest):
+    """#126 criterion 8: every failure the review code can meet is one `::error::` line, never
+    a traceback, and fails the check."""
+
+    def _labelled(self, reviews=None):
+        return FakeGitHub(issues={42: (ready("review:required"), "OPEN")}, reviews=reviews)
+
+    def _closed(self, fake, message, **env):
+        output = self.assertRejected(fake, message, **env)
+        self.assertEqual(sum(line.startswith("::error::") for line in output.splitlines()), 1, output)
+        self.assertNotIn("Traceback", output)
+        return output
+
+    def test_unreadable_reviews_fail_the_check(self):
+        for error in (ApiError(1, "gh: Resource not accessible by integration (HTTP 403)\n"), ApiError(1, "gh: Server Error (HTTP 502)\n"),
+                      ApiError(1, "error connecting to api.github.com\n"), ApiError(1, "")):
+            with self.subTest(error=error.stderr):
+                output = self._closed(self._labelled(error), "could not read the reviews of the pull request (gh api exit 1)")
+                self.assertIn(error.stderr.strip() or "no output", output)
+
+    def test_unparseable_reviews_fail_the_check(self):
+        for raw in ("not json", '{"message": "Bad credentials"}', "[[1]]", '[["review"]]', "null", '[[{"state": 5}]]'):
+            with self.subTest(raw=raw):
+                self._closed(self._labelled(raw), "could not parse the reviews of the pull request")
+
+    def test_review_without_a_user_does_not_count(self):
+        ghost = {"user": None, "state": "APPROVED", "commit_id": HEAD, "body": None, "submitted_at": None}
+        self._closed(self._labelled([ghost]), "no review of the head counts")
+
+    def test_missing_head_fails_the_check_before_any_lookup(self):
+        for head in ("", "  ", "not-a-sha", HEAD[:39]):
+            with self.subTest(head=head):
+                fake = self._labelled([review()])
+                self._closed(fake, "The event carries no pull request head SHA", HEAD_SHA=head)
+                self.assertEqual(fake.calls, [])
+
+    def test_missing_author_fails_the_check_when_a_review_is_required(self):
+        fake = self._labelled([review()])
+        self._closed(fake, "the event carries no pull request author", PR_AUTHOR="")
+        self.assertEqual(fake.review_calls(), [])
+
+    def test_missing_author_is_not_read_when_no_review_is_required(self):
+        self.assertAccepted(FakeGitHub(), PR_AUTHOR="")
+
+
+class WorkflowTriggerTests(unittest.TestCase):
+    """#126 criterion 5: submitting a review runs the check, here and in an adopter's caller."""
+
+    TRIGGER = re.compile(r"^(\s*)pull_request_review:\n\1  types: \[submitted\]$", re.M)
+
+    def test_the_workflow_runs_on_a_submitted_review(self):
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertRegex(text, self.TRIGGER)
+        self.assertIn("PR_AUTHOR: ${{ github.event.pull_request.user.login }}", text)
+
+    def test_the_readme_caller_runs_on_a_submitted_review(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        caller = readme[readme.index("name: PR policy"):readme.index("pr-policy.yml@")]
+        self.assertRegex(caller, self.TRIGGER)
+
+    def test_the_template_has_no_review_section(self):
+        template = (ROOT / ".github" / "pull_request_template.md").read_text(encoding="utf-8")
+        self.assertNotRegex(template, r"(?m)^##\s+Review\b")
+        self.assertNotIn("reviewed SHA", template)
+        self.assertRegex(template, r"(?m)^- Implementer runtime:")
 
 
 class SharedHeadTests(PolicyTest):
@@ -452,6 +680,9 @@ class ThresholdTests(PolicyTest):
     CAPPED = dict(APPROVAL_MODE="auto", PRIORITY_CAP="P2", OWNER_CATEGORIES="kind:security")
 
     def _task(self, labels, timeline, **kwargs):
+        # A task above a threshold also requires a review of the head (ReviewRequirementTests);
+        # these tests are about whose Ready it is, so the head is reviewed.
+        kwargs.setdefault("reviews", [review()])
         return FakeGitHub(issues={42: (labels, "OPEN")}, timelines={42: timeline}, **kwargs)
 
     def test_capped_task_readied_by_the_owner_is_accepted(self):
@@ -538,8 +769,9 @@ class ThresholdTests(PolicyTest):
         self.assertEqual(fake.timeline_calls(), [])
 
     def test_record_only_reference_does_not_evaluate_the_thresholds(self):
+        # Whose Ready it is goes unread on the record-only path; the review of the head does not.
         fake = FakeGitHub(body="Refs #42", files=["docs/adr/0008-example.md"], issues={42: (ready(priority="P1"), "OPEN")},
-                          timelines={42: [labeled("status:ready", "planner-bot")]})
+                          timelines={42: [labeled("status:ready", "planner-bot")]}, reviews=[review()])
         self.assertAccepted(fake, **self.CAPPED)
         self.assertEqual(fake.timeline_calls(), [])
 
