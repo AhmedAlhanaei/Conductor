@@ -10,10 +10,13 @@
 # request list, fails the check on both, because GitHub attaches check runs to commits and
 # one green run would let either merge. When the task requires a review, the pull request must
 # carry a native GitHub review of its head (ADR 0011): the check reads the submitted reviews
-# of the pull request, keeps those whose commit is the head, and passes when the newest one
-# that counts does not request changes. A review by the pull request author's own login
-# counts only when its text starts with "Reviewer: <runtime>"; a request for changes always
-# counts. Nothing in the pull request body records a review. The check also runs when a
+# of the pull request and keeps those whose commit is the head and whose author the
+# repository trusts: an owner, member or collaborator, or a bot (an installed app). Anyone
+# can review a public pull request, so any other account's review is ignored. It passes when
+# one such review exists and no reviewer's latest approval or request for changes on the
+# head is a request for changes; a comment never clears one. A comment review by the pull
+# request author's own login counts only when its text starts with "Reviewer: <runtime>".
+# Nothing in the pull request body records a review. The check also runs when a
 # review is submitted, so the review itself turns it green, and a new push turns it red
 # again. A review is required when the task carries a priority above
 # CONDUCTOR_ASSISTANT_PRIORITY_CAP, a label listed in CONDUCTOR_OWNER_CATEGORIES or the
@@ -238,9 +241,15 @@ jobs:
 
           def review_problem():
               # The native reviews of the pull request, read in full. A review counts when it
-              # was submitted on the head; one by the pull request author's own login counts
-              # only when its text starts with "Reviewer: <runtime>", and a request for changes
-              # always counts. The newest review that counts decides. Any failure fails closed.
+              # was submitted on the head by someone the repository trusts: an owner, member
+              # or collaborator (author_association), or a bot, which reviews only through an
+              # app installed here. Anyone can submit a review on a public repository, so a
+              # review by any other account is ignored. A comment review by the pull request
+              # author's own login counts only when its text starts with "Reviewer: <runtime>".
+              # Each reviewer's latest approval or request for changes on the head is their
+              # verdict, as GitHub reads it: a comment, theirs or anyone's, never clears a
+              # request for changes; an approval by that reviewer or a dismissal does.
+              # Any failure fails closed.
               author = os.environ.get("PR_AUTHOR", "").strip().lower()
               if not author:
                   return "the event carries no pull request author to compare the reviewer's login against"
@@ -250,31 +259,42 @@ jobs:
                   return f"could not read the reviews of the pull request (gh api exit {run.returncode}): {detail}. Check that the workflow token has pull-requests: read and that api.github.com is reachable, then re-run the check"
               try:
                   reviews = [review for page in json.loads(run.stdout) for review in page]
-                  counted, same_login, stale = [], 0, 0
-                  for index, review in enumerate(reviews):
+                  submitted = [(review.get("submitted_at") or "", index, review) for index, review in enumerate(reviews)]
+                  verdicts, passing, same_login, outside, stale = {}, [], 0, 0, 0
+                  for _, _, review in sorted(submitted, key=lambda entry: entry[:2]):
                       state = (review.get("state") or "").upper()
                       if state not in ("APPROVED", "COMMENTED", "CHANGES_REQUESTED"):
                           continue  # pending or dismissed: not a submitted verdict
                       if (review.get("commit_id") or "").lower() != head_sha:
                           stale += 1
                           continue
-                      login = ((review.get("user") or {}).get("login") or "").strip()
-                      named = re.match(r"\s*Reviewer:[ \t]*\S", review.get("body") or "")
-                      if state != "CHANGES_REQUESTED" and (not login or (login.lower() == author and not named)):
-                          same_login += 1
+                      user = review.get("user") or {}
+                      login = (user.get("login") or "").strip()
+                      trusted = (review.get("author_association") or "").upper() in ("OWNER", "MEMBER", "COLLABORATOR") or (user.get("type") or "") == "Bot"
+                      if not login or not trusted:
+                          outside += 1
                           continue
-                      counted.append((review.get("submitted_at") or "", index, login or "an unknown login", state))
+                      if state == "COMMENTED":
+                          if login.lower() == author and not re.match(r"\s*Reviewer:[ \t]*\S", review.get("body") or ""):
+                              same_login += 1
+                          else:
+                              passing.append((login, state))
+                          continue
+                      verdicts[login.lower()] = (login, state)
               except (ValueError, TypeError, AttributeError) as error:
                   return f"could not parse the reviews of the pull request ({type(error).__name__}: {error})"
-              if not counted:
-                  seen = f"{stale} of an earlier commit" if stale else "none submitted"
+              requesting = sorted(login for login, state in verdicts.values() if state == "CHANGES_REQUESTED")
+              if requesting:
+                  return f"the latest verdict of {', '.join(requesting)} on the head requests changes, and a comment does not clear it; push the fix and have the new head reviewed, or have that reviewer approve the head or the request dismissed"
+              passing += [verdict for verdict in verdicts.values()]
+              if not passing:
+                  seen = [f"{stale} of an earlier commit"] if stale else []
                   if same_login:
-                      seen += f", {same_login} of the head by the pull request author's login without a first line 'Reviewer: <runtime>'"
-                  return f"no review of the head counts ({seen}); a Reviewer submits a review of {head_sha} on the pull request"
-              _, _, login, state = max(counted)
-              if state == "CHANGES_REQUESTED":
-                  return f"the newest review of the head, by {login}, requests changes; push the fix and have the new head reviewed, or have the reviewer review the head again"
-              print(f"Review of head {head_sha} by {login} ({state.lower().replace('_', ' ')}).")
+                      seen.append(f"{same_login} of the head by the pull request author's login without a first line 'Reviewer: <runtime>'")
+                  if outside:
+                      seen.append(f"{outside} of the head by an account that is neither an owner, member or collaborator of {repo} nor a bot")
+                  return f"no review of the head counts ({', '.join(seen) or 'none submitted'}); a Reviewer submits a review of {head_sha} on the pull request"
+              print(f"Review of head {head_sha} by " + ", ".join(f"{login} ({state.lower()})" for login, state in passing) + ".")
               return None
 
           def labels_of(number):

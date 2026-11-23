@@ -180,9 +180,15 @@ def run_policy(fake, **env):
     return (0 if code is None else int(code)), output.getvalue()
 
 
-def review(login="grok-conductor[bot]", state="APPROVED", commit=HEAD, body="", at="2026-11-23T10:00:00Z"):
-    """One entry of the pull request reviews list, as the REST API returns it."""
-    return {"user": {"login": login}, "state": state, "commit_id": commit, "body": body, "submitted_at": at}
+def review(login="grok-conductor[bot]", state="APPROVED", commit=HEAD, body="", at="2026-11-23T10:00:00Z", association=None, kind=None):
+    """One entry of the pull request reviews list, as the REST API returns it. By default a
+    login ending in `[bot]` is an app's bot with no association, `author` is the repository
+    owner's own login, and any other login is a collaborator."""
+    bot = login.endswith("[bot]")
+    if association is None:
+        association = "NONE" if bot else "OWNER" if login.lower() == "author" else "COLLABORATOR"
+    return {"user": {"login": login, "type": kind or ("Bot" if bot else "User")}, "state": state, "commit_id": commit,
+            "body": body, "submitted_at": at, "author_association": association}
 
 
 def ready(*extra, priority="P2", category="kind:chore"):
@@ -380,7 +386,7 @@ class ReviewRequiredTests(PolicyTest):
 
     def test_approving_review_of_the_head_is_accepted(self):
         output = self.assertAccepted(self._labelled([review()]))
-        self.assertIn(f"Review of head {HEAD} by grok-conductor[bot] (approved)", output)
+        self.assertIn(f"Review of head {HEAD} by grok-conductor[bot] (approved).", output)
 
     def test_comment_review_of_the_head_by_another_login_is_accepted(self):
         output = self.assertAccepted(self._labelled([review(state="COMMENTED", body="No findings.")]))
@@ -407,12 +413,12 @@ class ReviewRequiredTests(PolicyTest):
 
     def test_request_for_changes_on_the_head_is_rejected(self):
         output = self.assertRejected(self._labelled([review(state="CHANGES_REQUESTED")]),
-                                     "the newest review of the head, by grok-conductor[bot], requests changes")
+                                     "the latest verdict of grok-conductor[bot] on the head requests changes")
         self._one_error_naming_the_head(output)
 
-    def test_newest_review_of_the_head_decides(self):
+    def test_each_reviewers_latest_verdict_on_the_head_decides(self):
         approved_then_changes = [review(at="2026-11-23T10:00:00Z"), review(login="codex[bot]", state="CHANGES_REQUESTED", at="2026-11-23T11:00:00Z")]
-        self.assertRejected(self._labelled(approved_then_changes), "by codex[bot], requests changes")
+        self.assertRejected(self._labelled(approved_then_changes), "the latest verdict of codex[bot] on the head requests changes")
         changes_then_approved = [review(state="CHANGES_REQUESTED", at="2026-11-23T10:00:00Z"), review(at="2026-11-23T11:00:00Z")]
         self.assertAccepted(self._labelled(changes_then_approved))
 
@@ -429,7 +435,7 @@ class ReviewRequiredTests(PolicyTest):
 
     def test_author_login_review_starting_with_the_reviewer_line_counts(self):
         output = self.assertAccepted(self._labelled([review(login="Author", state="COMMENTED", body="Reviewer: Codex\n\nNo findings.")]))
-        self.assertIn(f"Review of head {HEAD} by Author (commented)", output)
+        self.assertIn(f"Review of head {HEAD} by Author (commented).", output)
 
     def test_reviewer_line_must_start_the_text_and_name_a_runtime(self):
         for body in ("No findings.\nReviewer: Codex", "Reviewer:", "Reviewer:\nCodex", None):
@@ -439,6 +445,59 @@ class ReviewRequiredTests(PolicyTest):
     def test_author_login_reply_does_not_override_a_request_for_changes(self):
         reviews = [review(state="CHANGES_REQUESTED", at="2026-11-23T10:00:00Z"), review(login="author", state="COMMENTED", at="2026-11-23T11:00:00Z")]
         self.assertRejected(self._labelled(reviews), "requests changes")
+
+    def test_comment_review_never_clears_a_request_for_changes(self):
+        changes = review(state="CHANGES_REQUESTED", at="2026-11-23T10:00:00Z")
+        later = dict(state="COMMENTED", at="2026-11-23T11:00:00Z")
+        for name, comment in (("the reviewer's own inline reply", review(**later)),
+                              ("another reviewer's comment", review(login="codex[bot]", body="lgtm", **later)),
+                              ("the author's Reviewer line", review(login="author", body="Reviewer: claude\n\nFine.", **later))):
+            with self.subTest(comment=name):
+                self.assertRejected(self._labelled([changes, comment]), "the latest verdict of grok-conductor[bot] on the head requests changes")
+
+    def test_another_reviewers_approval_does_not_clear_a_request_for_changes(self):
+        reviews = [review(state="CHANGES_REQUESTED", at="2026-11-23T10:00:00Z"), review(login="codex[bot]", at="2026-11-23T11:00:00Z")]
+        self.assertRejected(self._labelled(reviews), "the latest verdict of grok-conductor[bot] on the head requests changes")
+
+    def test_dismissed_request_for_changes_no_longer_holds_the_head(self):
+        self.assertAccepted(self._labelled([review(state="DISMISSED", at="2026-11-23T10:00:00Z"), review(login="codex[bot]", at="2026-11-23T11:00:00Z")]))
+
+    def test_verdict_order_follows_the_submission_time_not_the_list_order(self):
+        reviews = [review(at="2026-11-23T11:00:00Z"), review(state="CHANGES_REQUESTED", at="2026-11-23T10:00:00Z")]
+        self.assertAccepted(self._labelled(reviews))
+
+    def test_review_by_an_outside_account_does_not_count(self):
+        for association in ("NONE", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "MANNEQUIN", "", None):
+            for state in ("COMMENTED", "APPROVED"):
+                with self.subTest(association=association, state=state):
+                    outsider = review(login="passer-by", state=state, body="lgtm", association=association or "")
+                    if association is None:
+                        del outsider["author_association"]
+                    output = self.assertRejected(self._labelled([outsider]), "1 of the head by an account that is neither an owner, member or collaborator of owner/repo nor a bot")
+                    self._one_error_naming_the_head(output)
+
+    def test_outside_account_can_neither_hold_nor_clear_a_head(self):
+        outsider = review(login="passer-by", state="CHANGES_REQUESTED", association="NONE", at="2026-11-23T11:00:00Z")
+        self.assertAccepted(self._labelled([review(), outsider]))
+        self.assertRejected(self._labelled([review(state="CHANGES_REQUESTED"), review(login="passer-by", association="NONE", at="2026-11-23T11:00:00Z")]),
+                            "requests changes")
+
+    def test_owner_member_collaborator_and_bot_reviews_count(self):
+        for association in ("OWNER", "MEMBER", "COLLABORATOR", "member"):
+            with self.subTest(association=association):
+                self.assertAccepted(self._labelled([review(login="colleague", association=association)]))
+        self.assertAccepted(self._labelled([review(login="grok-conductor[bot]", association="NONE")]))
+        self.assertRejected(self._labelled([review(login="looks-like[bot]", association="NONE", kind="User")]), "no review of the head counts")
+
+    def test_review_without_a_commit_does_not_count(self):
+        for commit in (None, ""):
+            with self.subTest(commit=commit):
+                self.assertRejected(self._labelled([review(commit=commit)]), "no review of the head counts (1 of an earlier commit)")
+
+    def test_author_login_comparison_ignores_case(self):
+        unnamed = review(login="AUTHOR", state="COMMENTED", body="Looks fine.", association="OWNER")
+        self.assertRejected(self._labelled([unnamed]), "by the pull request author's login without a first line")
+        self.assertRejected(self._labelled([review(login="author", state="COMMENTED", body="Looks fine.")]), "by the pull request author's login without a first line", PR_AUTHOR="Author")
 
     def test_review_on_the_second_page_is_read(self):
         reviews = [review(commit=STALE) for _ in range(PAGE)] + [review()]
@@ -545,7 +604,7 @@ class ReviewFailureTests(PolicyTest):
                 self._closed(self._labelled(raw), "could not parse the reviews of the pull request")
 
     def test_review_without_a_user_does_not_count(self):
-        ghost = {"user": None, "state": "APPROVED", "commit_id": HEAD, "body": None, "submitted_at": None}
+        ghost = {"user": None, "state": "APPROVED", "commit_id": HEAD, "body": None, "submitted_at": None, "author_association": "MEMBER"}
         self._closed(self._labelled([ghost]), "no review of the head counts")
 
     def test_missing_head_fails_the_check_before_any_lookup(self):
