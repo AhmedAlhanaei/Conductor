@@ -33,10 +33,10 @@ A session holds one role at a time.
   or needs a decision, and does not narrate steps. Never implements or pushes.
 - Implementer (one thread, one task): claims one Ready record, works on one branch, drives one
   pull request to green and stops there.
-- Reviewer (a separate thread): reads one pull request against its record and reports findings
-  as advisory comments. Never pushes to the branch. Runs on a different runtime than the one
-  the Implementer's claim comment names (a Codex or Gemini review of a Claude pull request, a
-  Claude Reviewer thread of a Codex one).
+- Reviewer (a separate thread): reads one pull request against its record and submits its
+  findings as a native GitHub review of the head. Never pushes to the branch. Runs on a
+  different runtime than the one the pull request names as the Implementer's (a Codex or
+  Gemini review of a Claude pull request, a Claude Reviewer thread of a Codex one).
 
 Delegating a bounded piece to a sub-agent or another assistant never transfers ownership or
 the role; the result returns through the delegating session and is verified before it is
@@ -181,12 +181,12 @@ labelled together with one comment naming the round.
    `linked-task` are green and the owner never clicks for a sub-issue. The checks run on
    the pull request head, not on the squash commit on `main`: when `main` moved under the
    pull request, update the branch with `main` before auto-merge lands it. In `manual`, stop
-   at the Merge gate. A record labelled `review:required` (the Planner applies it at filing to
-   every P0, P1 and `kind:security` record; the owner may add or remove it elsewhere) keeps
-   `linked-task` red until the pull request body's Review line reads `Reviewer: <runtime or
-   login>, reviewed SHA: <head SHA>`, written by the Reviewer after reading that head (ADR
-   0007); any other record's review stays advisory: it follows the merge on `main`, by a
-   runtime other than the Implementer's; findings become its sub-issues or Backlog lines.
+   at the Merge gate. A record above the assistant priority cap, in an owner-only category or
+   labelled `review:required` keeps `linked-task` red until the Reviewer submits a GitHub
+   review of the head that does not request changes; a push needs a new review, and a review
+   from the author's login counts only when it starts `Reviewer: <runtime>` (ADR 0011). Any
+   other record's review stays advisory: it follows the merge on `main`, by a runtime other
+   than the Implementer's; findings become its sub-issues or Backlog lines.
 5. Post no milestone comment: the pull request carries the head SHA, the checks and the
    proposals. When stopping instead, also when context or quota runs low, open no pull
    request and post one handoff comment on the record: the blocker, the next executable step

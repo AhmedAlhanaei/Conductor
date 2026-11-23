@@ -4,6 +4,8 @@
 Closes #
 <!-- One task only: the body names no other task after a closing keyword, not even quoted in code or a blockquote. -->
 
+- Implementer runtime: <for example Claude Code; the Reviewer runs on another and submits a GitHub review of the head, nothing is written here>
+
 ## What changed and why
 
 ## Verification against the exact head
@@ -20,18 +22,12 @@ One row per numbered acceptance criterion of the record, filled before the pull 
 
 - Pushes to the open pull request: <n> of <budget from the record, default 2>
 - Billed Actions minutes for this pull request: <n, or "0, public repository">
-- Lead time from `status:ready` to merge: <filled in the milestone comment when not yet known>
+- Lead time from `status:ready` to merge: <n, or "not merged yet"; read from the issue timeline and the merge>
 
 ## Merge danger
 
 - Door: two-way (one revert commit undoes it, no data or external effect) or one-way (migration, published artifact, external call, deletion, credential or access change). State which and why.
 - Blast radius: what else breaks if this is wrong, and who notices first.
-
-## Review
-
-- Reviewer: <runtime or login>, reviewed SHA: <40-hex>
-  (a runtime other than the Implementer's; advisory, except that when the task carries
-  `review:required` the `linked-task` check holds the merge until this line names the head)
 
 ## Found and left
 
