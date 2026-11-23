@@ -14,6 +14,9 @@
   what `linked-task` enforced and §6 contradicted it; the check now enforces §5
 - Amended by: ADR 0011 (2026-11-21): `agent:grok` is unused; Grok reviews the pull requests in
   Review that have no review of the head, not those whose checks are green
+- Amended by: note of 2026-11-23 (#143), at the end of this record: a review by
+  `grok-conductor[bot]` was shown live on this pull request; the pull request's review
+  list and Actions runs are the evidence
 - Roles: decision grilled by the Planner (project coordinator); this record written by the
   Implementer (a project thread)
 
@@ -139,3 +142,8 @@ check.
   connector that acts as the owner, or by a session on the owner's login, reads as the
   owner's (§2 and ADR 0008 §5); the parent record's readiness actor is not tested in either
   mode (found and left on #99). No third mode value and no new repository variable.
+
+## Note, 2026-11-23 (#143)
+
+A review by `grok-conductor[bot]` was shown live on this pull request. The pull
+request's review list and Actions runs are the evidence.
