@@ -8,6 +8,9 @@
 - Amended by: ADR 0007 (2026-11-07): the Reviewer runs on a different runtime than the
   Implementer, and for records labelled `review:required` the review becomes a gate held by
   the `linked-task` check; it stays advisory for the rest.
+- Amended by: ADR 0011 (2026-11-21): File is no longer a gate; the owner's three decisions
+  are Ready, Merge and Reject; the status list and the single queue give way to states read
+  from GitHub, which the Implementer does not move.
 - Date: 2026-10-18
 - Deciders: repository owner
 - Task record: #37

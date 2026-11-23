@@ -2,7 +2,7 @@
 
 Conductor is one page of rules and two GitHub checks for projects where coding assistants
 (Claude Code, Codex, Cursor, Gemini CLI, Grok) do the work and one human owner keeps three
-decisions: what gets filed, what is ready to build, and what lands on the default branch.
+decisions: what is ready to build, what lands on the default branch, and what is rejected.
 Every assistant reads the same page, [`AGENTS.md`](AGENTS.md); GitHub enforces it through
 branch protection and two required checks. Nothing is generated, pinned or copied, and there
 is no application runtime: this repository is documentation, workflows, templates and skills.
@@ -11,8 +11,9 @@ It is for a solo owner or a small team who want several assistants to work the s
 without a merge they did not decide, a task nobody filed, or a check nobody ran.
 
 The states a record passes through, what each waits for and who moves it are in one file,
-[`docs/lifecycle.md`](docs/lifecycle.md). It describes the model accepted on 2026-11-21,
-which the page does not state yet; its first lines say what is in force.
+[`docs/lifecycle.md`](docs/lifecycle.md), a reference for the model the page states since
+[ADR 0011](docs/adr/0011-record-states.md). The page governs; that file's status block and
+its "What is live today" table were written before ADR 0011 and are behind on that point.
 
 ## How it works
 
@@ -22,13 +23,21 @@ which the page does not state yet; its first lines say what is in force.
 non-goals, allowed paths, budget and stop conditions. A plan agreed in chat is not a record
 ([Task records](AGENTS.md#task-records)).
 
-**Three owner gates.** File (an idea becomes a record), Ready (the `status:ready` label, with
-a comment naming the approving message) and Merge (the pull request lands). Approval comes
-only from the owner's own words; an assistant's message is evidence, not permission
-([Owner gates](AGENTS.md#owner-gates), [ADR 0003](docs/adr/0003-backlog-gates-and-roles.md)).
+**Two owner gates, and Reject.** Ready (the `status:ready` label, with a comment naming the
+approving message) and Merge (the pull request lands) are gates; Reject (a record closed as
+not planned or duplicate, with the reason) is the owner's third decision. Filing is open to
+anyone: every issue starts in Triage. Approval comes only from the owner's own words; an
+assistant's message is evidence, not permission ([Owner gates](AGENTS.md#owner-gates),
+[ADR 0003](docs/adr/0003-backlog-gates-and-roles.md)).
 
-**Two approval modes.** In `manual` every gate is the owner's. In `auto` the owner's File and
-Ready on a top-level record reach its sub-issues: the Planner files and readies them, and
+**Eight states, read from GitHub.** A record is in Triage, Ready, Implement, Review, Rework
+or Merge, then Done or Rejected; a record with sub-issues is in Triage, Ready, Implement or
+Review, then Done or Rejected. The state is read from labels, assignee, pull request, checks,
+reviews and the close reason by one ordered rule; nobody writes it, and the Implementer moves
+none ([Task records](AGENTS.md#task-records), [ADR 0011](docs/adr/0011-record-states.md)).
+
+**Two approval modes.** In `manual` every gate is the owner's. In `auto` the owner's
+Ready on a top-level record reaches its sub-issues: the Planner files and readies them, and
 GitHub squash-merges a green pull request by itself. Two thresholds hold the Ready back in
 `auto`: a priority cap and owner-only categories, above which the owner readies
 ([ADR 0005](docs/adr/0005-approval-modes.md), [ADR 0008](docs/adr/0008-thresholds-in-auto.md)).
@@ -94,7 +103,7 @@ runs the contract on the exact head, opens one pull request from the
    General, Pull Requests: tick **Allow auto-merge** for `auto`.
 5. Create the labels the policy uses: priorities `P0` to `P3`, `blocked:owner`, categories
    `kind:*`, `kind:tracking`, `status:ready`, and optionally `agent:claude`, `agent:codex`,
-   `agent:gemini`, `agent:grok`.
+   `agent:gemini`.
 6. Paste `AGENTS.md` into the assistant's project instructions where it has them, and enable
    the two skills on the account.
 
@@ -198,17 +207,22 @@ that breaks the rule; the record, the pull request and the review are where it s
 | One branch, one head, one pull request; no second pull request at the same head | `linked-task` |
 | A `review:required` task holds the merge until the Review line names the head | `linked-task`. That the Reviewer is another runtime and read that head: trust only |
 | A pull request that changes only record paths (`docs/adr/`) may use `Refs #n` | `linked-task` |
-| A record with sub-issues gets `Refs #n`, not a closing keyword | Trust only, and outside record paths not followable: `linked-task` refuses a pull request without a closing keyword |
+| A parent never has a pull request of its own; its own work is a sub-issue | Trust only. `linked-task` does not look at whether the closed task has sub-issues |
 | The verification contract passes on the head | `verify`, on the pull request head. Its whitespace row, `git diff --check`, compares a clean checkout with itself and cannot fail in CI |
 | Nothing lands on the default branch without a pull request and both checks green; no bypass; no force-push there | Branch protection |
 | A green pull request in `auto` squash-merges by itself | GitHub native (auto-merge), once a session arms it |
 | The branch is updated when `main` moved under the pull request | Trust only, unless branch protection requires branches to be up to date |
-| Merge by hand; mark a draft ready; approve as a merge authorization | Trust only. Branch protection limits a hand merge to a green pull request, and with approvals off an approval changes nothing |
+| Merge by hand; mark a draft ready; approve in place of the owner's Merge gate (a Reviewer's native review of a head is allowed) | Trust only. Branch protection limits a hand merge to a green pull request, and with approvals off an approval changes nothing |
 | Edit branch protection, required checks or variables | GitHub native (admin permission) for an assistant with its own identity; trust only for a session acting through the owner's account |
 | Skip, disable or quarantine a check to get green | Branch protection keeps the two check names required; a pull request that edits what `verify` runs is not detected: trust only |
 | The Ready facts are filled in | GitHub native (required fields of the task form) at filing; their content, and an issue filed without the form: trust only |
-| File recorded in the first comment; Ready applied with a comment naming the approving message; approval only from the owner's own words | Trust only |
-| `status:ready` on a top-level record is the owner's | Trust only below the thresholds |
+| Ready applied with a comment naming the approving message; approval only from the owner's own words | Trust only |
+| `status:ready` on a top-level record is the owner's: applied by the owner, or by a session on the owner's own message naming the record, never on a session's judgment | Trust only below the thresholds |
+| A record's state is read by the ordered rule; nobody writes it | Nothing to enforce: the state is a reading of GitHub facts, not a field. `linked-task` holds the Ready fact (`status:ready`); the checks and auto-merge are the Merge and Done facts |
+| Who moves each state; the Implementer moves none; the Planner assigns the issue when it starts the thread | Trust only, apart from the Ready and Merge rows above |
+| Reject is the owner's decision, with a reason; a parent with a finished child closes as Done and its unfinished children are Rejected | Trust only |
+| Blocked is `blocked:owner` beside a priority | Trust only. `linked-task` refuses a pull request that closes a task carrying `blocked:owner` |
+| `P2` and `P3` records without `review:required` may merge unread; the weekly backlog review lists them | GitHub native (auto-merge) for the merge. The list: not produced yet; `backlog-review.yml` gains it in [#128](https://github.com/AhmedAlhanaei/Conductor/issues/128) |
 | Three levels; related work is a sub-issue; the Planner's closing report on the parent | Trust only |
 | Selection order; `agent:*` labels; claim, release and handoff comments; the milestone comment | Trust only |
 | One role per session; the Planner and the Reviewer never push; at most two threads in parallel | Trust only |
@@ -224,13 +238,15 @@ that breaks the rule; the record, the pull request and the review are where it s
 
 ## Status
 
-Lifecycle Active; approval mode `auto`; latest decision ADR 0009. Conductor runs itself with
-these rules: its [issues](https://github.com/AhmedAlhanaei/Conductor/issues) are the task records
-and the pinned Backlog issue holds the proposals. Documentation only; no application runtime.
+Lifecycle Active; approval mode `auto`; latest decision [ADR
+0011](docs/adr/0011-record-states.md). Conductor runs itself with these rules: its
+[issues](https://github.com/AhmedAlhanaei/Conductor/issues) are the task records and the pinned
+Backlog issue is an optional notebook of one-line ideas. Documentation only; no application
+runtime.
 It is deliberately small ([ADR 0006](docs/adr/0006-minimal-core.md)): the policy fits one page,
 and anything that would need a generator, a runtime or a second copy of the rules is out.
 
-## The twenty files
+## The files
 
 | Path | What it is |
 | --- | --- |
@@ -245,4 +261,5 @@ and anything that would need a generator, a runtime or a second copy of the rule
 | `.github/ISSUE_TEMPLATE/task.yml` | The task form with the Ready facts. |
 | `.github/pull_request_template.md` | `Closes #n`, the verification ledger, merge danger, review line, "Found and left". |
 | `skills/task-start/SKILL.md`, `skills/task-finish/SKILL.md` | The two task boundaries as prose steps; upload them as account skills. |
-| `docs/adr/0002` to `0009` | Decision history. ADR 0006 records the shrink to this shape; ADR 0007 the review gate; ADR 0008 the thresholds in `auto`; ADR 0009 Grok as a readying and reviewing identity. |
+| `docs/adr/0002` to `0011` | Decision history. ADR 0006 records the shrink to this shape; ADR 0007 the review gate; ADR 0008 the thresholds in `auto`; ADR 0009 Grok as a readying and reviewing identity; ADR 0010 the checker called at a tag; ADR 0011 the states of a record and who moves them. |
+| `docs/lifecycle.md` | Reference for the states of a record; the page governs. |

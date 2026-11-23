@@ -11,6 +11,8 @@
 - Amended by: ADR 0009 (2026-11-07): the identity §5 leaves open is Grok, acting as
   `grok-conductor[bot]` through an installation token, as Planner and Reviewer within the
   thresholds; the actor test is no longer a no-op for records Grok readies
+- Amended by: ADR 0011 (2026-11-21): the cap and the owner-only categories also decide when a
+  review is required
 - Roles: decision grilled by the Planner (project coordinator); this record written by the
   Implementer (a project thread)
 

@@ -8,6 +8,8 @@
 - Task record: #88 (top-level record)
 - Amends: ADR 0003 (the Reviewer role and the advisory review; the `linked-task` check gains a
   second condition for labelled records)
+- Amended by: ADR 0011 (the review of a head is recorded as a native GitHub review instead of
+  a line in the pull request body, and `linked-task` computes when one is required)
 - Roles: decision grilled by the Planner (project coordinator); this record written by the
   Implementer (a project thread)
 

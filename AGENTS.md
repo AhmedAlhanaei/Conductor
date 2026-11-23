@@ -14,8 +14,8 @@ or a skill grants no authority, the task record and the platform do.
 - Repository: https://github.com/AhmedAlhanaei/Conductor.
 - Lifecycle: Active (values Active, Parked, Closed with the outcome completed, cancelled or
   superseded; nothing starts on a Parked or Closed project; parking is not completion).
-- Task records: the GitHub issues of this repository; the pinned Backlog issue holds one-line
-  proposals that are not yet records.
+- Task records: the GitHub issues of this repository; the pinned Backlog issue is an optional
+  notebook of one-line ideas, not a state or a queue.
 - Approval mode: `auto` (ADR 0005). Integration branch: `main`. Deployment: none.
 - Assistant priority cap: `P2`. Owner-only categories: `kind:security` (ADR 0008; `none` when
   a project sets neither).
@@ -25,9 +25,9 @@ or a skill grants no authority, the task record and the platform do.
 
 A session holds one role at a time and declares it in its claim comment.
 
-- Owner (human): files and readies top-level records, sets priorities and queue order, merges
-  promotions into the default branch, owns branch protection, required checks and repository
-  variables. Never bypassed.
+- Owner (human): readies top-level records, rejects records, sets priorities and queue order,
+  merges promotions into the default branch, owns branch protection, required checks and
+  repository variables. Never bypassed.
 - Planner (the project coordinator): proposes, grills and files records, splits them, keeps
   the Backlog issue, reviews advisory-only, posts to the owner when a thread finishes, blocks
   or needs a decision, and does not narrate steps. Never implements or pushes.
@@ -47,15 +47,19 @@ thread and waits for the owner.
 
 ## Owner gates
 
-- File: an idea becomes a record. Recorded in the record's first comment with the approval,
-  its date and where it was given.
-- Ready: Backlog becomes Ready. Recorded by the `status:ready` label, applied with a comment
-  naming the approving message. The `linked-task` check requires it on the task a pull
-  request closes.
-- Merge: a pull request lands. Recorded by the merge itself.
+The owner's three decisions are two gates, Ready and Merge, and Reject. Filing is open to
+anyone and is not a gate: every issue is a record from the moment it is filed, in Triage.
 
-In `manual` every gate is the owner's. In `auto` the owner's File and Ready on a top-level
-record reach its sub-issues: the Planner files and readies them with the Ready facts and the
+- Ready: Triage becomes Ready. Recorded by the `status:ready` label, applied with a comment
+  naming the approving message. The `linked-task` check requires it on the task a pull
+  request closes. On a top-level record a session applies the label only on the owner's own
+  message naming that record, and its comment names that message.
+- Merge: a pull request lands. Recorded by the merge itself.
+- Reject: a record closes as not planned or duplicate, with the reason, from any state. A
+  parent with a finished child closes as Done and its unfinished children are Rejected.
+
+In `manual` every gate is the owner's. In `auto` the owner's Ready on a top-level
+record reaches its sub-issues: the Planner files and readies them with the Ready facts and the
 native parent link, GitHub squash-merges a green pull request into the integration branch,
 and, where the project names a staging deploy, CI runs it on that merge. Two thresholds hold
 the Ready back (ADR 0008): a sub-issue above the assistant priority cap or in an owner-only
@@ -74,17 +78,39 @@ covers unless its scope or risk changed.
   Ready facts from the issue form: bounded outcome, acceptance criteria with the test or
   inspection for each, non-goals and dependencies, allowed paths, services and actions, data
   classification, environment, budget, stop conditions. A plan agreed in chat is not a record.
-- A record is Backlog, Ready (`status:ready`), In progress (claimed), Review (pull request
-  open) or Done (merged); one status field, never two that can disagree.
-- Three levels and no more: a top-level record (filed and readied by the owner), its
-  sub-issues (filed and readied by the Planner in `auto`, as the gates say), and a tracking
-  parent (`kind:tracking`, no priority) when a record only holds sub-issues. Work related to
-  an open record is filed as its sub-issue, never as a sibling, with the native parent link. A
-  record stands alone only when no open record covers it.
-- An optional `agent:claude`, `agent:codex`, `agent:gemini` or `agent:grok` label says which
-  assistant may claim a record; no label means any assistant. Grok is a Planner and Reviewer
-  runtime only, and readies or reviews solely as `grok-conductor[bot]` through the App's
-  installation token, never through a connector that acts as the owner (ADR 0009).
+- A record has one state (ADR 0011). The state names the work the record waits for and is
+  read from GitHub by an ordered rule, first match wins; nobody writes it. Leaf: closed as
+  completed is Done; closed as not planned or duplicate is Rejected; an open pull request that
+  closes it with every required check green on the head is Merge; with `verify` red on the
+  head, or the newest review of the head requesting changes, is Rework, as is a record
+  reopened after a revert (open, with a merged pull request and no open one); any other open
+  pull request is Review; open, `status:ready` and assigned is Implement; open and
+  `status:ready` is Ready; open is Triage. Parent (any record with sub-issues): Done and
+  Rejected as a leaf; open with every sub-issue closed is Review; open with a sub-issue open
+  is Implement; otherwise as a leaf.
+- Who moves a state, never the Implementer. Into Triage: anyone. Triage to Ready: the owner in
+  `manual`, on a top-level record, above the assistant priority cap and in an owner-only
+  category; the Planner for any other sub-issue in `auto` (`grok-conductor[bot]` in `grok`).
+  Ready to Implement: the Planner assigns the issue on starting the thread. Implement to Review
+  and Rework to Review: GitHub, on the pull request opening and on a push. Review to Rework:
+  the Reviewer's request for changes or a red `verify`. Review to Merge: green checks, after
+  the Reviewer's native review where one is required. Merge to Done: GitHub auto-merge for a
+  sub-issue in `auto`, the owner otherwise and on promotion. Done to Rework: the owner reopens
+  after a revert, or the Planner in `auto`. Any state to Rejected: the owner. A parent's
+  Review: a Reviewer on another runtime when it carries `review:required`, else the Planner.
+- Flags sit beside a state. Blocked is the `blocked:owner` label beside a priority. `kind` is
+  the type of work, and `kind:security` wins a tie. `P2` and `P3` records without
+  `review:required` may merge unread; the weekly backlog review lists those still unreviewed.
+- Three levels and no more: a top-level record (readied by the owner), its sub-issues (filed
+  and readied by the Planner in `auto`, as the gates say), and a tracking parent
+  (`kind:tracking`, no priority) when a record only holds sub-issues. Work related to an open
+  record, a parent's own work included, is filed as its sub-issue, never as a sibling, with the
+  native parent link: a parent never has a pull request of its own. A record stands alone only
+  when no open record covers it.
+- An `agent:claude`, `agent:codex` or `agent:gemini` label says who may implement a record,
+  read once when work starts; none means any assistant. `agent:grok` is unused: Grok is a
+  Planner and Reviewer runtime only, and readies or reviews solely as `grok-conductor[bot]`
+  through its installation token, never through a connector acting as the owner (ADR 0009).
 - Selection: the highest open priority, oldest first within it. Labels, assignees and comments
   are descriptive, not locks; an ambiguous claim pauses conflicting writes. A missing update is
   stale or unknown, not proof the claimant has stopped.
@@ -127,8 +153,8 @@ labelled together with one comment naming the round.
 
 1. Refuse without `status:ready` on the record, and name the missing Ready fact instead. In
    `auto`, refuse a record above the assistant priority cap or in an owner-only category whose
-   `status:ready` the owner did not apply; the owner's Ready is the missing fact. Refuse a
-   record whose `agent:*` label names another assistant.
+   `status:ready` is not the owner's, as Owner gates defines it; the owner's Ready is the
+   missing fact. Refuse a record whose `agent:*` label names another assistant.
 2. Post the claim comment before changing anything: runtime, thread or session reference,
    time, role, branch. If the record carries an unreleased claim by someone else, stop and ask.
 3. Branch from the integration branch. Record the baseline: base SHA, dirty state, known
@@ -148,9 +174,7 @@ labelled together with one comment naming the round.
 3. Open the pull request against the integration branch from the repository template:
    `Closes #n`, the verification ledger, merge danger, "Found and left". One branch, one
    head and one pull request per task: GitHub attaches check runs to commits, so a second
-   open pull request at the same head commit turns `linked-task` red on both. A record with
-   sub-issues gets `Refs #n` in its pull request, not a closing keyword, so it stays open until
-   the Planner's closing report; `linked-task` is unchanged.
+   open pull request at the same head commit turns `linked-task` red on both.
 4. In `auto`, enable GitHub auto-merge with squash as soon as the pull request is open,
    while the checks still run: GitHub refuses to arm it on a pull request that is already
    green, and then only the owner's click can land it. GitHub merges when `verify` and
@@ -171,14 +195,14 @@ labelled together with one comment naming the round.
 
 ## Never
 
-Merge by hand; mark a draft ready; approve a pull request as a merge authorization;
-force-push or rewrite history; edit branch protection, required checks or repository
-variables; push to a protected branch without a pull request; open a second pull request at
-a head commit another open pull request already has; apply `status:ready` to a
-top-level record; start a record that is not Ready; widen scope; deploy, spend, change
-credentials or access, share non-public data, or publish outside GitHub from a session; skip,
-disable or quarantine a check to get green; rotate accounts or evade quotas; put credentials
-in these files.
+Merge by hand; mark a draft ready; approve a pull request in place of the owner's Merge gate (a
+Reviewer's native review of a head is allowed); force-push or rewrite history; edit branch
+protection, required checks or repository variables; push to a protected branch without a pull
+request; open a second pull request at a head commit another open pull request already has;
+apply `status:ready` to a top-level record on its own judgment; start a record that is not
+Ready; widen scope; deploy, spend, change credentials or access, share non-public data, or
+publish outside GitHub from a session; skip, disable or quarantine a check to get green; rotate
+accounts or evade quotas; put credentials in these files.
 
 ## Verification contract
 

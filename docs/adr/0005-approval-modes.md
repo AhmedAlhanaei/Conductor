@@ -9,6 +9,8 @@
   everything below its top-level records)
 - Amended by: ADR 0008 (approval mode `auto` gains an assistant priority cap and owner-only
   categories above which the Ready gate on a sub-issue returns to the owner)
+- Amended by: ADR 0011 (who moves each state in each mode replaces the table of §2; filing
+  leaves it, and the Planner may reopen a record after a revert in `auto`)
 - Roles: decision grilled by the Planner (project coordinator); this record written by the
   Implementer (a project thread)
 

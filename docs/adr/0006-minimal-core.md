@@ -12,6 +12,7 @@
 - Roles: decision grilled by the Planner (project coordinator); this record written by the
   Implementer (a project thread)
 - Amended by: ADR 0010 (adopters call `pr-policy.yml` at a tag instead of copying it)
+- Amended by: ADR 0011 (a third skill, `record-review`, joins the two boundary skills)
 
 ## Context
 
