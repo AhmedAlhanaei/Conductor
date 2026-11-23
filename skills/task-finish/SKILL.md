@@ -1,13 +1,14 @@
 ---
 name: task-finish
-description: Close a claimed task - run the verification contract on the exact head, open the pull request with Closes #n and the ledger, arm squash auto-merge in approval mode auto, post the milestone on the record, list what was found and left, and hand off on the record before the session ends; --stopped records a blocker instead
+description: Finish one task - run the verification contract on the exact head, re-read the record, open one pull request with Closes #n and the ledger, arm squash auto-merge in approval mode auto, fix on a red check or a request for changes; --stopped posts one handoff comment instead of a pull request; writes no other comment, label, assignment or review
 ---
 
 # Task finish
 
-The second and last time Conductor speaks in a task. `task-finish` turns the claimed branch
-into a reviewable pull request with evidence, or records an honest stop. A finish without
-evidence that matches the exact head is a stopped finish, never a done one.
+The second and last time Conductor speaks in a task. `task-finish` turns the branch into a
+reviewable pull request with evidence, or records an honest stop. A finish without evidence
+that matches the exact head is a stopped finish, never a done one. The pull request is the
+report: this skill posts no milestone, claim or release comment.
 
 1. Commit everything that belongs to the task. Evidence must name the SHA it ran on, so
    nothing may be uncommitted.
@@ -16,48 +17,41 @@ evidence that matches the exact head is a stopped finish, never a done one.
    memory. Record for each row: command, cwd, passed or failed, output lines that matter,
    tested SHA. If a row fails, fix, commit and run again; never skip, disable or quarantine
    a check to get green.
-3. Push the branch and open the pull request against the integration branch from the
+3. Before the pull request opens, read the record #n and its comments again. Answer a new
+   comment from the owner first. Pause and ask when the record itself changed since the
+   task started: its body, its labels, its parent, or it was closed.
+4. Push the branch and open one pull request against the integration branch from the
    repository's template: `Closes #n`; what changed and why; the verification ledger with
-   tested SHAs; merge danger (two-way or one-way door, blast radius); review line; a "Found
-   and left" block with every finding outside the task's scope, one line each with a
-   suggested priority. Fill the criterion-to-evidence table from the record's numbered
-   acceptance criteria, one row each with evidence, result and tested SHA, before the pull
-   request opens. Nothing found mid-task is done here.
-4. When the project's approval mode is `auto` and the task is a sub-issue of a readied
-   parent, enable GitHub auto-merge with squash on the pull request; GitHub merges it when
-   `verify` and `linked-task` are green. Never merge by hand; in `manual` the owner merges.
-5. Post the milestone comment on #n:
-
-   ```
-   **Finished.** Task #n by <assistant> (<role>, <runtime>, <reference>) on branch
-   `<branch>` at `<head SHA>`, <UTC time>. Checks: <row: passed|failed>; ... Pull request:
-   #<pr> (<auto-merge armed | owner merges>). Found and left: <one line each>.
-   ```
-
-6. Stopping instead (`task-finish --stopped`): post on #n the blocker, the next executable
-   step, the head SHA and whatever evidence was gathered, and open no pull request. Use it
-   when context, quota, access or the owner's decision runs out.
-7. Drive the pull request to green: on a red check or a review finding, fix on the same
-   branch and push; the ledger is updated to the new head. A pull request that waits on the
-   owner says so in one comment.
-8. Hand off on the record as the last step of the session, in every role and on the stopped
-   path too. Gather every fact from GitHub and `git` (the record, its pull requests, `git
+   tested SHAs; the runtime that implemented it; merge danger (two-way or one-way door,
+   blast radius); a "Found and left" block with every finding outside the task's scope, one
+   line each with a suggested priority. Fill the criterion-to-evidence table from the
+   record's numbered acceptance criteria, one row each with evidence, result and tested
+   SHA, before the pull request opens. Nothing found mid-task is done here.
+5. When the project's approval mode is `auto` and the task is a sub-issue of a readied
+   parent, enable GitHub auto-merge with squash as soon as the pull request is open, while
+   the checks still run; GitHub merges it when the required checks are green. In `manual`
+   the owner merges.
+6. Drive the pull request to green: on a red check or a review that requests changes,
+   reproduce and fix locally on the same branch, put the fixes for several findings in one
+   push within the record's push budget, and update the ledger to the new head. Where the
+   record requires a review, wait for the Reviewer's review of the head; when `main` moved
+   under the pull request, update the branch with `main`.
+7. Stopping instead (`task-finish --stopped`), when context, quota, access or the owner's
+   decision runs out: open no pull request and post one handoff comment on #n, the only
+   comment this skill writes. Gather every fact from GitHub and `git` (the record, `git
    log`, `git status`), never from memory or chat; write `unknown` for what is not known.
-   Post one comment on #n and release the claim with it:
 
    ```
    **Handoff.** <role> on <runtime>, <reference>, <UTC time>. Branch `<branch>` at
-   `<head SHA>`. Merged: <pull request and merge SHA | none>. Pushed, unmerged: <pull
-   request or branch and head | none>. Decisions: <one line each | none>. Blockers: <open
-   blockers | none>. Found and left: <one line each | none>. Next step: <one sentence a
-   fresh session can execute>. Claim released.
+   `<head SHA>`. Pushed: <branch and head | none>. Unpushed or local: <what | none>.
+   Evidence: <rows run and their result | none>. Decisions: <one line each | none>.
+   Blockers: <open blockers | none>. Found and left: <one line each | none>. Next step:
+   <one sentence a fresh session can execute>.
    ```
 
-9. When #n is a tracking or top-level parent, the handoff is its closing report and lists
-   every child as `#<child>: pull request #<pr>, merge SHA <sha>`, with the verification
-   evidence, decisions, found and left, and the next record to open. Refuse to post it, and
-   name the child, while any child is open or a child's pull request is unmerged. In
-   approval mode `auto` close the parent with the report; in `manual` leave it to the owner.
+Refuse, whoever asks: merging by hand; reviewing or approving your own pull request;
+applying or removing a label, assigning, closing or reopening any issue; a second pull
+request for the task. The record's state moves by what GitHub holds, never by this skill.
 
-Stop and ask the owner when the pull request would close a task other than the claimed one,
-or when a verification row needs a tool the session cannot install.
+Stop and ask the owner when the pull request would close a task other than the one you
+started, or when a verification row needs a tool the session cannot install.

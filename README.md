@@ -56,12 +56,15 @@ pull request. `verify` ([`ci.yml`](.github/workflows/ci.yml)) runs the
 [verification contract](AGENTS.md#verification-contract). Both are required on the default
 branch, so the rules hold even when a session ignores the page.
 
-**Two task boundaries.** [`task-start`](skills/task-start/SKILL.md) turns a Ready record into
-a claimed branch with a claim comment and a recorded baseline; [`task-finish`](skills/task-finish/SKILL.md)
-runs the contract on the exact head, opens one pull request from the
-[template](.github/pull_request_template.md) with the evidence ledger, arms auto-merge in
-`auto`, and posts the milestone on the record ([Task start](AGENTS.md#task-start),
-[Task finish](AGENTS.md#task-finish), [Never](AGENTS.md#never)).
+**Three skills.** [`task-start`](skills/task-start/SKILL.md) turns a Ready record into a
+branch with a recorded baseline; [`task-finish`](skills/task-finish/SKILL.md) runs the
+contract on the exact head, opens one pull request from the
+[template](.github/pull_request_template.md) with the evidence ledger and arms auto-merge in
+`auto`. Neither writes a claim, a milestone, a label or an assignment; a session that stops
+without a pull request posts one handoff comment. [`record-review`](skills/record-review/SKILL.md)
+is the Reviewer's: one native review of a pull request's head against its record
+([Task start](AGENTS.md#task-start), [Task finish](AGENTS.md#task-finish),
+[Never](AGENTS.md#never)).
 
 ## Try it
 
@@ -109,7 +112,7 @@ runs the contract on the exact head, opens one pull request from the
    `kind:*`, `kind:tracking`, `status:ready`, and optionally `agent:claude`, `agent:codex`,
    `agent:gemini`.
 6. Paste `AGENTS.md` into the assistant's project instructions where it has them, and enable
-   the two skills on the account.
+   the three skills on the account.
 
 A policy change is one commit to `AGENTS.md`; `git log -1 -- AGENTS.md` names the revision an
 assistant read.
@@ -189,7 +192,7 @@ owner's, in the browser.
    is fixed or closed at the next backlog review, never left rebasing
    ([Task records](AGENTS.md#task-records)).
 6. **Connect the assistants**: paste `AGENTS.md` into the project instructions where the
-   assistant has them and enable the two skills on the account, as in step 6 of
+   assistant has them and enable the three skills on the account, as in step 6 of
    [Try it](#try-it). Then file the first task from the form and let one pull request close
    it.
 
@@ -228,7 +231,7 @@ that breaks the rule; the record, the pull request and the review are where it s
 | Blocked is `blocked:owner` beside a priority | Trust only. `linked-task` refuses a pull request that closes a task carrying `blocked:owner` |
 | `P2` and `P3` records without `review:required` may merge unread; the weekly backlog review lists them | GitHub native (auto-merge) for the merge. The list: not produced yet; `backlog-review.yml` gains it in [#128](https://github.com/AhmedAlhanaei/Conductor/issues/128) |
 | Three levels; related work is a sub-issue; the Planner's closing report on the parent | Trust only |
-| Selection order; `agent:*` labels; claim, release and handoff comments; the milestone comment | Trust only |
+| Selection order; `agent:*` labels; no claim, release or milestone comment from the Implementer; one handoff comment when a session stops without a pull request | Trust only |
 | One role per session; the Planner and the Reviewer never push; at most two threads in parallel | Trust only |
 | Stay inside the record's allowed paths; take exactly the task given; never widen scope | Trust only |
 | The push budget; a red check fixed locally before the next push; work in progress never pushed to a pull request | Trust only |
@@ -264,6 +267,6 @@ and anything that would need a generator, a runtime or a second copy of the rule
 | `.github/workflows/backlog-review.yml` | Optional weekly read-only backlog report. |
 | `.github/ISSUE_TEMPLATE/task.yml` | The task form with the Ready facts. |
 | `.github/pull_request_template.md` | `Closes #n`, the verification ledger, merge danger, review line, "Found and left". |
-| `skills/task-start/SKILL.md`, `skills/task-finish/SKILL.md` | The two task boundaries as prose steps; upload them as account skills. |
+| `skills/task-start/SKILL.md`, `skills/task-finish/SKILL.md`, `skills/record-review/SKILL.md` | The three skills as prose steps: the two task boundaries of the Implementer and the Reviewer's review of a head; upload them as account skills. |
 | `docs/adr/0002` to `0011` | Decision history. ADR 0006 records the shrink to this shape; ADR 0007 the review gate; ADR 0008 the thresholds in `auto`; ADR 0009 Grok as a readying and reviewing identity; ADR 0010 the checker called at a tag; ADR 0011 the states of a record and who moves them. |
 | `docs/lifecycle.md` | Reference for the states of a record; the page governs. |
