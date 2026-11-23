@@ -14,6 +14,8 @@
   what `linked-task` enforced and §6 contradicted it; the check now enforces §5
 - Amended by: ADR 0011 (2026-11-21): `agent:grok` is unused; Grok reviews the pull requests in
   Review that have no review of the head, not those whose checks are green
+- Amended by: note of 2026-11-23 (#139), at the end of this record: a Claude App identity,
+  `claude-conductor`, exists for one use inside GitHub Actions; "not planned" no longer holds
 - Roles: decision grilled by the Planner (project coordinator); this record written by the
   Implementer (a project thread)
 
@@ -139,3 +141,24 @@ check.
   connector that acts as the owner, or by a session on the owner's login, reads as the
   owner's (§2 and ADR 0008 §5); the parent record's readiness actor is not tested in either
   mode (found and left on #99). No third mode value and no new repository variable.
+
+## Amendment note, 2026-11-23 (#139)
+
+The text above stands as decided. The Context says "A Claude App identity is not planned",
+and the alternatives list it as deferred. The owner said on 2026-11-22 that he added a GitHub
+App named `claude-conductor`, and #139 tests it, so that sentence no longer holds. The reason
+behind it does: a Claude cloud session still cannot mint or carry an App token, so the
+identity runs only inside GitHub Actions, where the key stays.
+
+What the App may be used for, and nothing more until a later record says so:
+
+- One fixed comment on #139, posted by `.github/workflows/claude-identity.yml` on a manual
+  dispatch of `main` by the owner, with a token minted for Issues write only. The run fails
+  unless GitHub attributes the comment to `claude-conductor[bot]`, type `Bot`, through that
+  App.
+- No `status:ready`, review, label or pull request write. Claude does not ready or review as
+  this App: §1 to §6 are unchanged, and the actor test of ADR 0008 §3 gains no new identity
+  to trust.
+
+The result of the live run is recorded on #139, not here; this note does not say the
+identity is demonstrated.
