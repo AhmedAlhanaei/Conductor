@@ -46,7 +46,10 @@ DEFAULT_ENV = {
     "OWNER_LOGIN": "owner",
     "HEAD_SHA": HEAD,
     "PR_AUTHOR": "author",
+    "GITHUB_EVENT_NAME": "pull_request",
+    "GITHUB_RUN_ID": "900",
 }
+WORKFLOW_ID = 55  # the workflow the current run (GITHUB_RUN_ID) belongs to
 
 
 def embedded_script():
@@ -97,6 +100,15 @@ class FakeGitHub:
         # order GitHub returns them (oldest first), an ApiError, or a raw string; by default
         # the pull request has no review
         self.reviews = [] if reviews is None else reviews
+        # what `gh api repos/{repo}/actions/runs/{GITHUB_RUN_ID}` answers, or an ApiError
+        self.current_run = {"id": 900, "workflow_id": WORKFLOW_ID}
+        # the `pull_request` runs of the workflow on the head: a list of runs, an ApiError or
+        # a raw string; `run_polls`, when set, is answered first, one entry per lookup
+        self.runs = []
+        self.run_polls = []
+        # what the re-run call answers: None (HTTP 201, empty body) or an ApiError
+        self.rerun = None
+        self.sleeps = []
         self.calls = []
 
     def __call__(self, args, check=False, capture_output=False, text=False, **kwargs):
@@ -141,6 +153,22 @@ class FakeGitHub:
             if isinstance(self.reviews, str):
                 return self.reviews
             return json.dumps([self.reviews[i:i + PAGE] for i in range(0, len(self.reviews), PAGE)] or [[]])
+        if args == ["api", f"repos/owner/repo/actions/runs/{DEFAULT_ENV['GITHUB_RUN_ID']}"]:
+            if isinstance(self.current_run, ApiError):
+                raise self.current_run
+            return json.dumps(self.current_run)
+        if args[0] == "api" and args[-1].startswith("repos/owner/repo/actions/workflows/"):
+            assert args == ["api", f"repos/owner/repo/actions/workflows/{WORKFLOW_ID}/runs?head_sha={self.head}&event=pull_request&per_page=100"], args
+            runs = self.run_polls.pop(0) if self.run_polls else self.runs
+            if isinstance(runs, ApiError):
+                raise runs
+            return runs if isinstance(runs, str) else json.dumps({"total_count": len(runs), "workflow_runs": runs})
+        match = re.fullmatch(r"repos/owner/repo/actions/runs/(\d+)/rerun", args[-1]) if args[0] == "api" else None
+        if match:
+            assert args[1:3] == ["--method", "POST"], "a re-run is a POST"
+            if isinstance(self.rerun, ApiError):
+                raise self.rerun
+            return ""
         match = re.fullmatch(r"repos/owner/repo/issues/(\d+)/parent", args[1]) if args[0] == "api" else None
         if match:
             parent = self.parents.get(int(match.group(1)), NO_PARENT)
@@ -161,6 +189,12 @@ class FakeGitHub:
     def review_calls(self):
         return [call for call in self.calls if call[0] == "gh" and call[1] == "api" and call[-1].endswith("/reviews")]
 
+    def rerun_calls(self):
+        return [call[-1] for call in self.calls if call[0] == "gh" and call[1] == "api" and call[-1].endswith("/rerun")]
+
+    def actions_calls(self):
+        return [call for call in self.calls if call[0] == "gh" and call[1] == "api" and "/actions/" in call[-1]]
+
     def timeline_calls(self):
         return [call for call in self.calls if call[0] == "gh" and call[1] == "api" and call[-1].endswith("/timeline")]
 
@@ -170,7 +204,7 @@ def run_policy(fake, **env):
     environment = {**DEFAULT_ENV, **env}
     output = io.StringIO()
     with mock.patch.dict(os.environ, environment, clear=False), mock.patch.object(subprocess, "run", fake), \
-            contextlib.redirect_stdout(output):
+            mock.patch("time.sleep", getattr(fake, "sleeps", []).append), contextlib.redirect_stdout(output):
         try:
             exec(compile(embedded_script(), str(WORKFLOW), "exec"), {"__name__": "pr_policy"})
         except SystemExit as stop:
@@ -621,6 +655,128 @@ class ReviewFailureTests(PolicyTest):
 
     def test_missing_author_is_not_read_when_no_review_is_required(self):
         self.assertAccepted(FakeGitHub(), PR_AUTHOR="")
+
+
+def workflow_run(run_id=800, conclusion="failure", status="completed", number=10, attempt=1):
+    """One entry of a workflow's run list, as the REST API returns it."""
+    return {"id": run_id, "run_number": number, "run_attempt": attempt, "event": "pull_request", "head_sha": HEAD,
+            "status": status, "conclusion": conclusion if status == "completed" else None}
+
+
+class ReviewRerunTests(PolicyTest):
+    """#142: the merge follows the `pull_request` run on the head, so the review-event run
+    re-runs that one when the two conclude differently, and says so when it cannot."""
+
+    REVIEW_EVENT = {"GITHUB_EVENT_NAME": "pull_request_review"}
+
+    def _fake(self, reviews=(), runs=(), labels=None):
+        fake = FakeGitHub(issues={42: (labels or ready("review:required"), "OPEN")}, reviews=list(reviews))
+        fake.runs = list(runs)
+        return fake
+
+    def _closed(self, fake, message):
+        output = self.assertRejected(fake, message, **self.REVIEW_EVENT)
+        self.assertEqual(sum(line.startswith("::error::") for line in output.splitlines()), 1, output)
+        self.assertNotIn("Traceback", output)
+        return output
+
+    def test_a_passing_review_reruns_the_red_pull_request_run(self):
+        fake = self._fake([review()], [workflow_run(800, "failure")])
+        output = self.assertAccepted(fake, **self.REVIEW_EVENT)
+        self.assertEqual(fake.rerun_calls(), ["repos/owner/repo/actions/runs/800/rerun"])
+        self.assertIn("Re-ran 'pull_request' run 800", output)
+
+    def test_a_request_for_changes_reruns_the_green_pull_request_run(self):
+        fake = self._fake([review(state="CHANGES_REQUESTED")], [workflow_run(800, "success")])
+        output = self._closed(fake, "requests changes")
+        self.assertEqual(fake.rerun_calls(), ["repos/owner/repo/actions/runs/800/rerun"])
+        self.assertIn("Re-ran 'pull_request' run 800", output)
+
+    def test_a_run_that_already_agrees_is_left_alone(self):
+        for reviews, conclusion, code in (([review()], "success", 0), ([], "failure", 1)):
+            with self.subTest(conclusion=conclusion):
+                fake = self._fake(reviews, [workflow_run(800, conclusion)])
+                self.assertEqual(run_policy(fake, **self.REVIEW_EVENT)[0], code)
+                self.assertEqual(fake.rerun_calls(), [])
+
+    def test_a_cancelled_or_skipped_run_is_rerun(self):
+        for conclusion in ("cancelled", "skipped", "timed_out", None):
+            with self.subTest(conclusion=conclusion):
+                fake = self._fake([review()], [dict(workflow_run(800), conclusion=conclusion)])
+                self.assertAccepted(fake, **self.REVIEW_EVENT)
+                self.assertEqual(len(fake.rerun_calls()), 1)
+
+    def test_the_newest_run_and_attempt_is_the_one_compared(self):
+        runs = [workflow_run(801, "success", number=11), workflow_run(800, "failure", number=10), workflow_run(799, "failure", number=9)]
+        fake = self._fake([review()], runs)
+        self.assertAccepted(fake, **self.REVIEW_EVENT)
+        self.assertEqual(fake.rerun_calls(), [])
+        fake = self._fake([review()], list(reversed(runs)) + [workflow_run(802, "failure", number=12)])
+        self.assertAccepted(fake, **self.REVIEW_EVENT)
+        self.assertEqual(fake.rerun_calls(), ["repos/owner/repo/actions/runs/802/rerun"])
+
+    def test_a_run_in_progress_is_waited_for_before_it_is_compared(self):
+        fake = self._fake([review()], [workflow_run(800, "failure")])
+        fake.run_polls = [[workflow_run(800, status="in_progress")], [workflow_run(800, status="queued")]]
+        self.assertAccepted(fake, **self.REVIEW_EVENT)
+        self.assertEqual(fake.sleeps, [10, 10])
+        self.assertEqual(len(fake.rerun_calls()), 1)
+
+    def test_a_run_that_never_completes_fails_the_check(self):
+        fake = self._fake([review()], [workflow_run(800, status="in_progress")])
+        self._closed(fake, "'pull_request' run 800 on the head is still in_progress after three minutes")
+        self.assertEqual(sum(fake.sleeps), 180)
+        self.assertEqual(fake.rerun_calls(), [])
+
+    def test_no_pull_request_run_on_the_head_fails_the_check(self):
+        self._closed(self._fake([review()], []), "no 'pull_request' run of this workflow exists on head")
+
+    def test_a_refused_rerun_fails_the_check(self):
+        for error in (ApiError(1, "gh: Resource not accessible by integration (HTTP 403)\n"), ApiError(1, "gh: Server Error (HTTP 502)\n"), ApiError(1, "")):
+            with self.subTest(error=error.stderr):
+                fake = self._fake([review()], [workflow_run(800, "failure")])
+                fake.rerun = error
+                output = self._closed(fake, "could not re-run the 'pull_request' run of this check on the head (gh api exit 1: ")
+                self.assertIn(error.stderr.strip() or "no output", output)
+                self.assertIn("actions: write", output)
+
+    def test_unreadable_runs_fail_the_check(self):
+        for attribute, answer in (("current_run", ApiError(1, "gh: Not Found (HTTP 404)\n")), ("current_run", {"id": 900}),
+                                  ("runs", ApiError(1, "gh: Server Error (HTTP 502)\n")), ("runs", "not json"),
+                                  ("runs", '{"message": "Bad credentials"}'), ("runs", '{"workflow_runs": [5]}'),
+                                  ("runs", '{"workflow_runs": [{"id": 1}]}'), ("runs", "null")):
+            with self.subTest(attribute=attribute, answer=str(answer)):
+                fake = self._fake([review()], [workflow_run(800, "failure")])
+                setattr(fake, attribute, answer)
+                self._closed(fake, "could not re-run the 'pull_request' run of this check on the head")
+                self.assertEqual(fake.rerun_calls(), [])
+
+    def test_a_failed_rerun_is_reported_beside_the_review_failure(self):
+        fake = self._fake([review(state="CHANGES_REQUESTED")], [workflow_run(800, "success")])
+        fake.rerun = ApiError(1, "gh: Resource not accessible by integration (HTTP 403)\n")
+        code, output = run_policy(fake, **self.REVIEW_EVENT)
+        self.assertEqual(code, 1, output)
+        self.assertEqual(sum(line.startswith("::error::") for line in output.splitlines()), 2, output)
+
+    def test_nothing_is_rerun_on_a_pull_request_event(self):
+        fake = self._fake([review()], [workflow_run(800, "failure")])
+        self.assertAccepted(fake)
+        self.assertEqual(fake.actions_calls(), [])
+
+    def test_nothing_is_rerun_when_the_task_requires_no_review(self):
+        fake = self._fake([review()], [workflow_run(800, "failure")], labels=ready())
+        self.assertAccepted(fake, **self.REVIEW_EVENT)
+        self.assertEqual(fake.actions_calls(), [])
+
+    def test_the_token_may_rerun_and_the_events_do_not_cancel_each_other(self):
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertRegex(text, r"(?m)^permissions:\n  actions: write\n  contents: read\n  issues: read\n  pull-requests: read\njobs:")
+        self.assertIn("group: pr-policy-${{ github.event.pull_request.number }}-${{ github.event_name }}", text)
+
+    def test_the_readme_caller_grants_the_rerun(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        caller = readme[readme.index("name: PR policy"):readme.index("pr-policy.yml@")]
+        self.assertRegex(caller, r"(?m)^\s*permissions:\n\s*actions: write\n")
 
 
 class WorkflowTriggerTests(unittest.TestCase):
