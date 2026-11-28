@@ -1,0 +1,181 @@
+# Tests the `claude-conductor` GitHub App identity (#139), as #132 did for Codex: one manual
+# run posts one fixed comment on the test issue and fails unless GitHub attributes it to
+# `claude-conductor[bot]`, type `Bot`, through that App.
+#
+# A Claude cloud session cannot hold an App token (ADR 0009), so the key stays in Actions.
+# Owner setup, read by this workflow and never written by it:
+# - the `claude-conductor` App installed on this repository with Issues: read and write,
+# - repository variable CLAUDE_CONDUCTOR_CLIENT_ID (the App's client ID),
+# - repository secret CLAUDE_CONDUCTOR_PRIVATE_KEY (one of the App's private keys, PEM).
+# The run refuses unless
+# - the event is a manual dispatch of this repository's `main`,
+# - the actor and the triggering actor are the owner (CONDUCTOR_OWNER_LOGIN, else the
+#   repository owner),
+# - the variable and the secret are set,
+# - the App token belongs to `claude-conductor`; it is minted with Issues write only,
+# - the target is the test issue of this repository, not a pull request and not a redirect.
+#   The issue may be closed: the pull request that adds this workflow closes it, and the
+#   workflow can only be dispatched once it is on `main`.
+# A second run posts nothing: it finds the first comment and verifies its author again.
+# The verifier is tested by tests/test_claude_identity.py, which executes this very script
+# with the gh calls replaced. Each run bills one rounded-up minute.
+name: Claude App identity test
+on:
+  workflow_dispatch:
+
+permissions: {}
+concurrency:
+  group: claude-identity
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      EXPECTED_REPOSITORY: AhmedAlhanaei/Conductor
+      OWNER_LOGIN: ${{ vars.CONDUCTOR_OWNER_LOGIN || github.repository_owner }}
+      ISSUE: "139"
+    steps:
+      # An early refusal, before any token exists. The verifier below repeats the caller
+      # checks and is the tested authority.
+      - name: Refuse an unauthorized or unprepared dispatch before minting a token
+        env:
+          CLIENT_ID: ${{ vars.CLAUDE_CONDUCTOR_CLIENT_ID }}
+          HAS_KEY: ${{ secrets.CLAUDE_CONDUCTOR_PRIVATE_KEY != '' }}
+        run: |
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
+          [[ "$GITHUB_REPOSITORY" == "$EXPECTED_REPOSITORY" ]]
+          [[ "$GITHUB_REF" == refs/heads/main ]]
+          [[ -n "$OWNER_LOGIN" && "${GITHUB_ACTOR,,}" == "${OWNER_LOGIN,,}" ]]
+          [[ "${GITHUB_TRIGGERING_ACTOR,,}" == "${OWNER_LOGIN,,}" ]]
+          if [[ -z "$CLIENT_ID" ]]; then
+            echo "::error::stopped: repository variable CLAUDE_CONDUCTOR_CLIENT_ID is not set"
+            exit 1
+          fi
+          if [[ "$HAS_KEY" != true ]]; then
+            echo "::error::stopped: repository secret CLAUDE_CONDUCTOR_PRIVATE_KEY is not set"
+            exit 1
+          fi
+
+      - name: Authenticate as the installed App
+        id: app
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
+        with:
+          client-id: ${{ vars.CLAUDE_CONDUCTOR_CLIENT_ID }}
+          private-key: ${{ secrets.CLAUDE_CONDUCTOR_PRIVATE_KEY }}
+          permission-issues: write
+
+      - name: Verify GitHub attribution on the test issue
+        id: verify
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+        shell: python
+        run: |
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+
+          APP = "claude-conductor"
+          BOT = APP + "[bot]"
+          BODY = (
+              "Claude App identity test (#139). This comment verifies GitHub App authentication "
+              "as `claude-conductor` from Conductor Actions."
+          )
+
+
+          def fail(reason):
+              print(f"::error::{reason}")
+              sys.exit(1)
+
+
+          def gh(*args, stdin=None):
+              return subprocess.run(["gh", "api", *args], input=stdin, capture_output=True, text=True)
+
+
+          def author(comment):
+              """Return (login, type, app slug) as GitHub records them for a comment."""
+              user = comment.get("user") or {}
+              via = (comment.get("performed_via_github_app") or {}).get("slug")
+              return user.get("login"), user.get("type"), via
+
+
+          env = os.environ.get
+          repo = env("GITHUB_REPOSITORY", "")
+          owner = env("OWNER_LOGIN", "").strip().lower()
+          issue = env("ISSUE", "")
+
+          # Who may ask, and where from.
+          if env("GITHUB_EVENT_NAME") != "workflow_dispatch":
+              fail("refused: only a manual dispatch may run the identity test")
+          if not repo or repo != env("EXPECTED_REPOSITORY"):
+              fail("refused: this workflow runs only in its own repository")
+          if env("GITHUB_REF") != "refs/heads/main":
+              fail("refused: dispatch the workflow on main")
+          if not owner or env("GITHUB_ACTOR", "").lower() != owner or env("GITHUB_TRIGGERING_ACTOR", "").lower() != owner:
+              fail("refused: the caller is not the owner (CONDUCTOR_OWNER_LOGIN); nothing was posted")
+          if env("APP_SLUG") != APP:
+              fail(f"identity mismatch: the token does not belong to the {APP} App; nothing was posted")
+          if not re.fullmatch(r"[1-9][0-9]{0,8}", issue):
+              fail("refused: the test issue is not an issue number")
+
+          # The target: the test issue of this repository, read as GitHub answers it.
+          endpoint = f"repos/{repo}/issues/{issue}"
+          answer = gh(endpoint)
+          if answer.returncode != 0:
+              fail(f"stopped: issue {issue} could not be read in {repo} (missing permission or installation?); nothing was posted")
+          try:
+              target = json.loads(answer.stdout)
+              same = str(target.get("url", "")).lower().endswith(f"/{endpoint}".lower())
+              number, is_pull = target.get("number"), "pull_request" in target
+          except (ValueError, AttributeError):
+              fail(f"wrong target: the answer for issue {issue} could not be read; nothing was posted")
+          if not same or number != int(issue):
+              fail(f"wrong target: {issue} is not an issue of {repo} (moved or redirected); nothing was posted")
+          if is_pull:
+              fail(f"wrong target: {issue} is a pull request; nothing was posted")
+
+          # One comment only: a rerun verifies the comment an earlier run posted.
+          answer = gh("--paginate", "--slurp", f"{endpoint}/comments?per_page=100")
+          if answer.returncode != 0:
+              fail("the existing comments could not be read, so a duplicate cannot be ruled out; nothing was posted")
+          try:
+              comments = [comment for page in json.loads(answer.stdout) for comment in page]
+              earlier = [c for c in comments if c.get("body") == BODY and author(c)[0] == BOT]
+              earlier_urls = [c["html_url"] for c in earlier]
+          except (ValueError, AttributeError, KeyError, TypeError):
+              fail("the existing comments could not be read, so a duplicate cannot be ruled out; nothing was posted")
+
+          if earlier:
+              result, comment, url = "verified-earlier", earlier[0], earlier_urls[0]
+          else:
+              answer = gh("--method", "POST", f"{endpoint}/comments", "--input", "-", stdin=json.dumps({"body": BODY}))
+              if answer.returncode != 0:
+                  fail("stopped: GitHub refused the comment (missing Issues write permission?); whether it was posted is unknown")
+              try:
+                  comment = json.loads(answer.stdout)
+                  url = comment["html_url"]
+              except (ValueError, AttributeError, KeyError, TypeError):
+                  fail("the comment was sent but GitHub's answer could not be read; check the issue before running again")
+              result = "posted"
+
+          login, kind, via = author(comment)
+          if login != BOT or kind != "Bot" or via != APP:
+              fail(
+                  f"identity mismatch: GitHub attributes {url} to login {login!r}, type {kind!r}, "
+                  f"App {via!r}, not {BOT}; stop and tell the owner"
+              )
+          if not re.fullmatch(r"https://[^\s]+", str(url)):
+              fail("GitHub returned no usable comment permalink")
+
+          print(f"{result}: {url}")
+          with open(env("GITHUB_OUTPUT", os.devnull), "a", encoding="utf-8") as out:
+              out.write(f"comment-url={url}\nresult={result}\n")
+          with open(env("GITHUB_STEP_SUMMARY", os.devnull), "a", encoding="utf-8") as out:
+              out.write(
+                  f"Claude App identity {result}: {url}\n\n"
+                  f"- Author: `{login}`\n- Type: `{kind}`\n- Through App: `{via}`\n- Issue: #{issue}\n"
+              )
