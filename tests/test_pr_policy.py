@@ -312,6 +312,16 @@ class ClosingTaskTests(PolicyTest):
     def test_owner_blocked_task_cannot_be_closed_by_a_pull_request(self):
         self.assertRejected(FakeGitHub(issues={42: (["blocked:owner", "kind:chore", "status:ready"], "OPEN")}), "blocked:owner")
 
+    def test_blocked_is_a_flag_and_never_stands_in_for_a_priority(self):
+        output = self.assertRejected(FakeGitHub(issues={42: (["blocked:owner", "kind:chore", "status:ready"], "OPEN")}), "no priority label")
+        self.assertIn("no pull request closes an owner-blocked record", output)
+        self.assertEqual(output.count("::error::"), 1, output)
+
+    def test_blocked_task_with_a_priority_still_cannot_be_closed_and_fails_with_one_error_line(self):
+        output = self.assertRejected(FakeGitHub(issues={42: (ready("blocked:owner"), "OPEN")}), "carries 'blocked:owner'; no pull request closes an owner-blocked record")
+        self.assertNotIn("no priority label", output)
+        self.assertEqual(output.count("::error::"), 1, output)
+
     def test_tracking_record_cannot_be_closed_by_a_pull_request(self):
         self.assertRejected(FakeGitHub(issues={42: (["kind:tracking", "status:ready"], "OPEN")}), "kind:tracking")
 
@@ -373,6 +383,15 @@ class ParentTests(PolicyTest):
 
     def test_tracking_parent_without_priority_is_accepted(self):
         self.assertAccepted(self._with_parent(["kind:tracking", "status:ready"]), APPROVAL_MODE="auto")
+
+    def test_parent_may_carry_a_priority_and_the_blocked_flag_together(self):
+        self.assertAccepted(self._with_parent(["P1", "blocked:owner", "kind:feature", "status:ready"]), APPROVAL_MODE="auto")
+        self.assertAccepted(self._with_parent(["P1", "blocked:owner", "kind:feature"]))
+
+    def test_blocked_parent_without_a_priority_is_rejected(self):
+        output = self.assertRejected(self._with_parent(["blocked:owner", "kind:feature", "status:ready"]), "Parent #7 of task #42 is not a workable record: no priority label")
+        self.assertIn("'blocked:owner' is a flag beside a priority, not in place of one", output)
+        self.assertEqual(output.count("::error::"), 1, output)
 
     def test_closed_parent_is_rejected(self):
         self.assertRejected(self._with_parent(["P1", "kind:feature", "status:ready"], "CLOSED"), "parent is closed")
@@ -873,6 +892,11 @@ class RecordOnlyReferenceTests(PolicyTest):
     def test_referenced_tracking_record_stays_accepted(self):
         fake = FakeGitHub(body="Refs #42", files=["docs/adr/0008-example.md"], issues={42: (["kind:tracking"], "OPEN")})
         self.assertAccepted(fake)
+
+    def test_referenced_blocked_record_needs_a_priority_beside_the_flag(self):
+        files = ("docs/adr/0012-example.md",)
+        self.assertAccepted(FakeGitHub(body="Refs #42", files=files, issues={42: (ready("blocked:owner"), "OPEN")}))
+        self.assertRejected(FakeGitHub(body="Refs #42", files=files, issues={42: (["blocked:owner", "kind:chore", "status:ready"], "OPEN")}), "no priority label")
 
     def test_referenced_record_still_needs_ready_and_labels(self):
         fake = FakeGitHub(body="Refs #42", files=["docs/adr/0008-example.md"], issues={42: (["P2", "kind:chore"], "OPEN")})

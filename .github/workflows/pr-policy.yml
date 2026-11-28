@@ -2,9 +2,12 @@
 # Checks that a pull request names exactly one task it closes (a closing keyword inside an
 # inline code span, a fenced code block or a blockquote line is quoted text and does not
 # count) and that the task is open and Ready: it carries exactly one priority (neither the owner-blocked marker nor the tracking
-# label), exactly one category and the owner's readiness label. When the task is a sub-issue,
-# its parent record is read too and must be open with one category and a priority, the
-# owner-blocked marker or the tracking label; only the API's HTTP 404 means "no parent", any
+# label), exactly one category and the owner's readiness label. The owner-blocked marker is a
+# flag beside a priority and never stands in for one (ADR 0011): a pull request that closes a
+# task carrying it fails, with or without a priority. When the task is a sub-issue,
+# its parent record is read too and must be open with one category and a priority or the
+# tracking label; a parent may carry a priority and the owner-blocked marker together.
+# Only the API's HTTP 404 means "no parent", any
 # other lookup failure fails the check. The head commit must belong to this pull request
 # alone: a second open pull request at the same head, on any page of the commit's pull
 # request list, fails the check on both, because GitHub attaches check runs to commits and
@@ -321,8 +324,10 @@ jobs:
               return [label["name"] for label in issue["labels"]], issue["state"]
 
           def label_problems(labels, closing_task=False):
-              # A parent or a referenced record may be owner-blocked or tracking; the task a pull
-              # request closes must be a runnable record with exactly one priority.
+              # Every record needs exactly one priority unless it is the tracking parent. The
+              # owner-blocked marker is a flag beside the priority, never in place of it: a
+              # parent or a referenced record may carry both, the task a pull request closes
+              # may not carry the marker at all.
               priority_count = sum(label in priorities for label in labels)
               categories = [label for label in labels if label.startswith(prefix)]
               problems = []
@@ -332,8 +337,8 @@ jobs:
                   problems.append(f"carries '{blocked}'; no pull request closes an owner-blocked record")
               if closing_task and tracking in labels:
                   problems.append(f"carries '{tracking}'; a pull request closes a sub-issue, not the tracking parent")
-              if priority_count == 0 and blocked not in labels and tracking not in labels:
-                  problems.append("no priority label" if closing_task else "no priority label and no owner-blocked marker")
+              if priority_count == 0 and tracking not in labels:
+                  problems.append("no priority label" + (f"; '{blocked}' is a flag beside a priority, not in place of one" if blocked in labels and not closing_task else ""))
               if len(categories) != 1:
                   problems.append(f"expected exactly one '{prefix}' label, found {len(categories)}")
               return problems
