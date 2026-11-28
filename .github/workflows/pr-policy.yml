@@ -17,16 +17,25 @@
 # head is a request for changes; a comment never clears one. A comment review by the pull
 # request author's own login counts only when its text starts with "Reviewer: <runtime>".
 # Nothing in the pull request body records a review. The check also runs when a
-# review is submitted, so the review itself turns it green, and a new push turns it red
-# again. A review is required when the task carries a priority above
+# review is submitted. GitHub keeps that run beside the run of the "pull_request" event on
+# the same head and the merge was seen to follow the "pull_request" one (#142), so when the
+# task requires a review the review-event run finishes by reading the newest "pull_request"
+# run of this workflow on the head, waiting up to three minutes for it to complete, and
+# re-running it when its conclusion differs from its own: the review is then the last action
+# anyone takes, in both directions (a review that passes turns the required check green, a
+# request for changes turns it red), and a new push turns it red again. That one call needs
+# "actions: write" on the workflow token, here and in a caller; it is the only write the
+# check makes. A pull request from a fork gets a read-only token on a review, so there the
+# re-run fails, the review-event run says so and someone re-runs the check by hand. A review
+# is required when the task carries a priority above
 # CONDUCTOR_ASSISTANT_PRIORITY_CAP, a label listed in CONDUCTOR_OWNER_CATEGORIES or the
 # review label, in both approval modes. Every failure the checker can meet, a missing task,
 # unreadable reviews or a missing head among them, is reported as one "::error::" line, never
 # a traceback, and fails the check. The
 # checker is tested by tests/test_pr_policy.py,
 # which executes this very script with the gh calls replaced. A project that calls this file
-# (ADR 0010) lists the same triggers in its caller, "pull_request_review" of type
-# "submitted" among them. Label names come from
+# (ADR 0010) lists the same triggers and the same permissions in its caller,
+# "pull_request_review" of type "submitted" and "actions: write" among them. Label names come from
 # repository variables so the project's own scale applies:
 #   CONDUCTOR_PRIORITY_LABELS   comma-separated, default "P0,P1,P2,P3"
 #   CONDUCTOR_BLOCKED_LABEL     default "blocked:owner"
@@ -81,9 +90,12 @@ on:
     types: [submitted]
   workflow_call:
 concurrency:
-  group: pr-policy-${{ github.event.pull_request.number }}
+  # One group per event: the review-event run re-runs the pull_request-event run, and in a
+  # shared group that re-run would cancel the run that asked for it.
+  group: pr-policy-${{ github.event.pull_request.number }}-${{ github.event_name }}
   cancel-in-progress: true
 permissions:
+  actions: write
   contents: read
   issues: read
   pull-requests: read
@@ -115,7 +127,7 @@ jobs:
       - name: Require a linked Ready task with one priority and one category
         shell: python
         run: |
-          import json, os, re, subprocess, sys
+          import json, os, re, subprocess, sys, time
 
           def gh(*args):
               return subprocess.run(["gh", *args], check=True, capture_output=True, text=True).stdout
@@ -338,7 +350,42 @@ jobs:
               print(f"::error::Could not read the parent of task #{number} (gh api exit {run.returncode}): {detail}. Only HTTP 404 means 'no parent'; check that the workflow token has issues: read and that api.github.com is reachable, then re-run the check.")
               sys.exit(1)
 
+          def rerun_problem(wanted):
+              # Only on a review event (#142). The merge follows the run of the pull_request
+              # event on this head, not this one, so that run is made to read the reviews
+              # again: find the newest one of this workflow, wait for it to complete, and
+              # re-run it unless it already concluded as this run does. Any failure is
+              # returned and fails this run: it never reports a review the gate does not show.
+              def api(*args):
+                  run = subprocess.run(["gh", "api", *args], capture_output=True, text=True)
+                  if run.returncode:
+                      raise RuntimeError(f"gh api exit {run.returncode}: " + (run.stderr.strip() or run.stdout.strip() or "no output"))
+                  return json.loads(run.stdout) if run.stdout.strip() else {}
+              by_hand = f"Re-run the 'pull_request' run of this check on {head_sha} by hand, or edit the pull request, so that the required check reads this review"
+              try:
+                  workflow = api(f"repos/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}")["workflow_id"]
+                  for attempt in range(19):
+                      runs = api(f"repos/{repo}/actions/workflows/{workflow}/runs?head_sha={head_sha}&event=pull_request&per_page=100")["workflow_runs"]
+                      if not runs:
+                          return f"no 'pull_request' run of this workflow exists on head {head_sha} to re-run. {by_hand}"
+                      latest = max(runs, key=lambda run: (run["run_number"], run.get("run_attempt") or 0))
+                      if latest["status"] == "completed":
+                          break
+                      if attempt == 18:
+                          return f"'pull_request' run {latest['id']} on the head is still {latest['status']} after three minutes and may have read the reviews before this one. {by_hand}"
+                      time.sleep(10)
+                  if latest.get("conclusion") == wanted:
+                      print(f"'pull_request' run {latest['id']} on the head already concluded {wanted}; nothing to re-run.")
+                      return None
+                  api("--method", "POST", f"repos/{repo}/actions/runs/{latest['id']}/rerun")
+              except (RuntimeError, KeyError, ValueError, TypeError, AttributeError) as error:
+                  detail = str(error) if isinstance(error, RuntimeError) else f"{type(error).__name__}: {error}"
+                  return f"could not re-run the 'pull_request' run of this check on the head ({detail}). The workflow token needs actions: write, in a caller too, and a pull request from a fork never gets it. {by_hand}"
+              print(f"Re-ran 'pull_request' run {latest['id']} (it concluded {latest.get('conclusion')}, this run concludes {wanted}); the required check follows that run.")
+              return None
+
           failed = False
+          reviewed_task = False
           for number in numbers:
               labels, state = labels_of(number)
               problems = label_problems(labels, closing_task=closing)
@@ -348,6 +395,7 @@ jobs:
                   problems.append(f"missing the '{ready}' label (owner gate Ready)")
               why_review = review_reasons(labels)
               if why_review:
+                  reviewed_task = True
                   problem = review_problem()
                   if problem:
                       failed = True
@@ -390,4 +438,9 @@ jobs:
                   print(f"::error::Parent #{parent} of task #{number} is not a workable record: " + "; ".join(parent_problems) + f" (labels: {', '.join(parent_labels) or 'none'})")
               else:
                   print(f"Parent #{parent} of task #{number} is open: labels {', '.join(parent_labels)}")
+          if reviewed_task and os.environ.get("GITHUB_EVENT_NAME") == "pull_request_review":
+              problem = rerun_problem("failure" if failed else "success")
+              if problem:
+                  failed = True
+                  print(f"::error::The review was read, but the required check does not show it yet: {problem}.")
           sys.exit(1 if failed else 0)

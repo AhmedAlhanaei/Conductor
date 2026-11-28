@@ -83,6 +83,7 @@ is the Reviewer's: one native review of a pull request's head against its record
      pull_request_review:
        types: [submitted]
    permissions:
+     actions: write
      contents: read
      issues: read
      pull-requests: read
@@ -90,6 +91,10 @@ is the Reviewer's: one native review of a pull request's head against its record
      linked-task:
        uses: AhmedAlhanaei/Conductor/.github/workflows/pr-policy.yml@v1
    ```
+
+   `actions: write` is for one call: when a review is submitted on a task that requires
+   one, the check re-runs its own run of the `pull_request` event on that head, which is the
+   run the merge follows. Without it a review is read but someone must re-run the check.
 3. In GitHub, repository Settings, Secrets and variables, Actions, Variables: set
    `CONDUCTOR_APPROVAL_MODE` to `manual` or `auto`, and `CONDUCTOR_BACKLOG_REVIEW_ISSUE` to
    the pinned backlog issue if you use the weekly report. `CONDUCTOR_REVIEW_REQUIRED_LABEL`
@@ -212,7 +217,7 @@ that breaks the rule; the record, the pull request and the review are where it s
 | In `auto`, a task above the priority cap or in an owner-only category was readied by the owner | `linked-task`, when a threshold variable is set. It compares the login that last applied the label, so it cannot tell the owner from a session acting through the owner's account |
 | In `auto`, a pull request targets the integration branch; only the promotion targets the default branch | `linked-task` |
 | One branch, one head, one pull request; no second pull request at the same head | `linked-task` |
-| A task above the priority cap, in an owner-only category or labelled `review:required` holds the merge until its head has a submitted GitHub review that does not request changes; a push needs a new one | `linked-task`, which reads the pull request's reviews and runs again when one is submitted. Only an owner, member, collaborator or bot counts, a comment never clears a request for changes, and a reviewer with its own login cannot be forged. A review from the author's login counts when it starts `Reviewer: <runtime>`, so that the Reviewer is another runtime than the Implementer, and read the head, is trust only |
+| A task above the priority cap, in an owner-only category or labelled `review:required` holds the merge until its head has a submitted GitHub review that does not request changes; a push needs a new one | `linked-task`, which reads the pull request's reviews. When one is submitted the check runs again and re-runs its `pull_request` run on the head, the one the merge follows, so a passing review unblocks the merge and a request for changes blocks it with no edit or push; on a pull request from a fork the token cannot re-run and someone re-runs the check by hand. Only an owner, member, collaborator or bot counts, a comment never clears a request for changes, and a reviewer with its own login cannot be forged. A review from the author's login counts when it starts `Reviewer: <runtime>`, so that the Reviewer is another runtime than the Implementer, and read the head, is trust only |
 | A pull request that changes only record paths (`docs/adr/`) may use `Refs #n` | `linked-task` |
 | A parent never has a pull request of its own; its own work is a sub-issue | Trust only. `linked-task` does not look at whether the closed task has sub-issues |
 | The verification contract passes on the head | `verify`, on the pull request head. Its whitespace row, `git diff --check`, compares a clean checkout with itself and cannot fail in CI |

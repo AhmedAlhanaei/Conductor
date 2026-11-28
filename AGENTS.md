@@ -183,10 +183,11 @@ labelled together with one comment naming the round.
    pull request, update the branch with `main` before auto-merge lands it. In `manual`, stop
    at the Merge gate. A record above the assistant priority cap, in an owner-only category or
    labelled `review:required` keeps `linked-task` red until the Reviewer submits a GitHub
-   review of the head that does not request changes; a push needs a new review, and a review
-   from the author's login counts only when it starts `Reviewer: <runtime>` (ADR 0011). Any
-   other record's review stays advisory: it follows the merge on `main`, by a runtime other
-   than the Implementer's; findings become its sub-issues or Backlog lines.
+   review of the head that does not request changes; the review re-runs the check itself, so
+   no edit or push follows it. A push needs a new review, and a review from the author's
+   login counts only when it starts `Reviewer: <runtime>` (ADR 0011). Any other record's
+   review stays advisory: it follows the merge on `main`, by a runtime other than the
+   Implementer's; findings become its sub-issues or Backlog lines.
 5. Post no milestone comment: the pull request carries the head SHA, the checks and the
    proposals. When stopping instead, also when context or quota runs low, open no pull
    request and post one handoff comment on the record: the blocker, the next executable step
