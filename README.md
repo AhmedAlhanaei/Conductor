@@ -73,7 +73,7 @@ is the Reviewer's: one native review of a pull request's head against its record
 2. Edit the first section of `AGENTS.md` to the project's facts, and its verification
    contract to the project's own commands.
    Replace the copied `.github/workflows/pr-policy.yml` with this caller, so the project
-   always runs the current checker ([ADR 0010](docs/adr/0010-reusable-workflows.md)); keep
+   always runs the released checker ([ADR 0010](docs/adr/0010-reusable-workflows.md)); keep
    the copied `ci.yml` and replace its rows:
 
    ```yaml
@@ -96,6 +96,10 @@ is the Reviewer's: one native review of a pull request's head against its record
    `actions: write` is for one call: when a review is submitted on a task that requires
    one, the check re-runs its own run of the `pull_request` event on that head, which is the
    run the merge follows. Without it a review is read but someone must re-run the check.
+   The ref after `@` is a tag or a commit SHA, never `main` or another branch: `main` is
+   where changes are staged. `v1` moves to a release only after a release candidate tag
+   passed on one adopter; an exact tag such as `v1.0.0`, or a SHA, never moves
+   ([ADR 0012](docs/adr/0012-release-step.md)).
 3. In GitHub, repository Settings, Secrets and variables, Actions, Variables: set
    `CONDUCTOR_APPROVAL_MODE` to `manual` or `auto`, and `CONDUCTOR_BACKLOG_REVIEW_ISSUE` to
    the pinned backlog issue if you use the weekly report. `CONDUCTOR_REVIEW_REQUIRED_LABEL`
@@ -134,7 +138,8 @@ owner's, in the browser.
    (`https://github.com/OWNER/REPO/pulls`). Copy `AGENTS.md`, `CLAUDE.md`,
    `.github/ISSUE_TEMPLATE/task.yml` and `.github/pull_request_template.md`. Do not copy
    `pr-policy.yml`: add the caller from step 2 of [Try it](#try-it), which runs the checker
-   at the tag `v1` ([ADR 0010](docs/adr/0010-reusable-workflows.md)). Keep the repository's
+   at the tag `v1`, never at `main` ([ADR 0010](docs/adr/0010-reusable-workflows.md),
+   [ADR 0012](docs/adr/0012-release-step.md)). Keep the repository's
    own CI and give it one job named `verify` that runs its verification contract, with the
    cost defaults from the header of [`ci.yml`](.github/workflows/ci.yml); copy `ci.yml` and
    replace its rows only when there is no CI yet. `backlog-review.yml` is optional. In the
@@ -274,5 +279,5 @@ and anything that would need a generator, a runtime or a second copy of the rule
 | `.github/ISSUE_TEMPLATE/task.yml` | The task form: title, Problem and Parent task required at filing, the Ready facts before Ready, and "Success criteria (parent only)". |
 | `.github/pull_request_template.md` | `Closes #n`, the verification ledger, merge danger, review line, "Found and left". |
 | `skills/task-start/SKILL.md`, `skills/task-finish/SKILL.md`, `skills/record-review/SKILL.md` | The three skills as prose steps: the two task boundaries of the Implementer and the Reviewer's review of a head; upload them as account skills. |
-| `docs/adr/0002` to `0011` | Decision history. ADR 0006 records the shrink to this shape; ADR 0007 the review gate; ADR 0008 the thresholds in `auto`; ADR 0009 Grok as a readying and reviewing identity; ADR 0010 the checker called at a tag; ADR 0011 the states of a record and who moves them. |
+| `docs/adr/0002` to `0012` | Decision history. ADR 0006 records the shrink to this shape; ADR 0007 the review gate; ADR 0008 the thresholds in `auto`; ADR 0009 Grok as a readying and reviewing identity; ADR 0010 the checker called at a tag; ADR 0011 the states of a record and who moves them; ADR 0012 the release step, a candidate tag tested on an adopter before `v1` moves. |
 | `docs/lifecycle.md` | Reference for the states of a record; the page governs. |

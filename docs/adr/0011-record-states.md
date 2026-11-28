@@ -12,6 +12,8 @@
   ADR 0007 (how a review is recorded and when one is required), ADR 0008 (the thresholds
   also decide when a review is required), ADR 0009 (`agent:grok`; which pull requests Grok
   reviews) and ADR 0010 (the caller's trigger; the first tag)
+- Amended by: ADR 0012 (the first tag on the merge commit of #128 is `v1-rc1`; `v1` follows on
+  the same commit)
 - Roles: decision grilled by the Planner (project threads "Find better status tracking" and
   "Check open issues for conflicts"); this record written by the Implementer (a project
   thread)
