@@ -1,0 +1,452 @@
+# Tests what the `claude-conductor` GitHub App can do with Issues write (#146, #147). One
+# manual run creates one disposable demo issue as a native sub-issue of #146 and makes each
+# issue write once: edit, comment, a neutral label on and off, a priority and a category,
+# assign and unassign, the readiness label on and off, close, reopen, close. After each
+# write it reads GitHub's own answer and fails unless the write is attributed to
+# `claude-conductor[bot]`, type `Bot`, through that App where GitHub returns the marker.
+#
+# What a green run shows: which App wrote. It does not show who decided: the caller check
+# allows the owner's login, and every claude.ai session acts as that login too. The
+# readiness label on the demo issue is a demonstration of the mechanism, removed in the
+# same run; it makes the App no accepted Ready actor for real records (#146).
+#
+# Owner setup, read by this workflow and never written by it (as claude-identity.yml):
+# - the `claude-conductor` App installed on this repository with Issues: read and write,
+# - repository variable CLAUDE_CONDUCTOR_CLIENT_ID and secret CLAUDE_CONDUCTOR_PRIVATE_KEY.
+# The run refuses unless
+# - the event is a manual dispatch of this repository's `main`,
+# - the actor and the triggering actor are the owner (CONDUCTOR_OWNER_LOGIN, else the
+#   repository owner),
+# - the variable and the secret are set, and the token belongs to `claude-conductor`; it is
+#   minted with Issues write only,
+# - the approval mode is `auto`, the four labels exist, `P3` is within the assistant
+#   priority cap, `kind:chore` is not an owner-only category, and #146 is open and Ready.
+# It writes to nothing but the demo issue, its own comment there and the sub-issue link on
+# #146. Every step reads what GitHub already records, so a second run writes nothing and a
+# run that stopped part-way resumes at the first write that has no event yet. After any
+# failure it removes the readiness label from the demo issue if it is there, and says so.
+# The script is tested by tests/test_claude_capabilities.py, which executes this very text
+# with the gh calls replaced. Each run bills one rounded-up minute.
+name: Claude App capability test
+on:
+  workflow_dispatch:
+
+permissions: {}
+concurrency:
+  group: claude-capabilities
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EXPECTED_REPOSITORY: AhmedAlhanaei/Conductor
+      OWNER_LOGIN: ${{ vars.CONDUCTOR_OWNER_LOGIN || github.repository_owner }}
+    steps:
+      # An early refusal, before any token exists. The script below repeats the caller
+      # checks and is the tested authority.
+      - name: Refuse an unauthorized or unprepared dispatch before minting a token
+        env:
+          CLIENT_ID: ${{ vars.CLAUDE_CONDUCTOR_CLIENT_ID }}
+          HAS_KEY: ${{ secrets.CLAUDE_CONDUCTOR_PRIVATE_KEY != '' }}
+        run: |
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
+          [[ "$GITHUB_REPOSITORY" == "$EXPECTED_REPOSITORY" ]]
+          [[ "$GITHUB_REF" == refs/heads/main ]]
+          [[ -n "$OWNER_LOGIN" && "${GITHUB_ACTOR,,}" == "${OWNER_LOGIN,,}" ]]
+          [[ "${GITHUB_TRIGGERING_ACTOR,,}" == "${OWNER_LOGIN,,}" ]]
+          if [[ -z "$CLIENT_ID" ]]; then
+            echo "::error::stopped: repository variable CLAUDE_CONDUCTOR_CLIENT_ID is not set"
+            exit 1
+          fi
+          if [[ "$HAS_KEY" != true ]]; then
+            echo "::error::stopped: repository secret CLAUDE_CONDUCTOR_PRIVATE_KEY is not set"
+            exit 1
+          fi
+
+      - name: Authenticate as the installed App
+        id: app
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
+        with:
+          client-id: ${{ vars.CLAUDE_CONDUCTOR_CLIENT_ID }}
+          private-key: ${{ secrets.CLAUDE_CONDUCTOR_PRIVATE_KEY }}
+          permission-issues: write
+
+      - name: Make each issue write once and verify GitHub's attribution
+        id: probe
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          APPROVAL_MODE: ${{ vars.CONDUCTOR_APPROVAL_MODE || 'manual' }}
+          PRIORITY_CAP: ${{ vars.CONDUCTOR_ASSISTANT_PRIORITY_CAP }}
+          OWNER_CATEGORIES: ${{ vars.CONDUCTOR_OWNER_CATEGORIES }}
+        shell: python
+        run: |
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          import time
+          import urllib.parse
+
+          APP = "claude-conductor"
+          BOT = APP + "[bot]"
+          PARENT = 146
+          TITLE = "[demo] claude-conductor capability test"
+          NEUTRAL, PRIORITY, KIND, READY = "question", "P3", "kind:chore", "status:ready"
+          PRIORITIES = ["P0", "P1", "P2", "P3"]
+          BODY_FIRST = (
+              f"Demonstration only. The `{APP}` App opened this issue in the capability test of "
+              f"#{PARENT}. It carries no work: nobody implements it, and the same run closes it as "
+              "not planned."
+          )
+          BODY_EDITED = BODY_FIRST + "\n\nThe App edited this body once in the same test."
+          COMMENT_FIRST = f"Capability test of #{PARENT}: a comment posted by the `{APP}` App."
+          COMMENT_EDITED = COMMENT_FIRST + " The App edited it once."
+          STEPS = [
+              ("2", "create the demo issue"),
+              ("3", f"link it as a sub-issue of #{PARENT}"),
+              ("4", "edit its body"),
+              ("5", "comment and edit the comment"),
+              ("6", f"add and remove `{NEUTRAL}`"),
+              ("7", f"apply `{PRIORITY}` and `{KIND}`"),
+              ("8", "assign and unassign the owner"),
+              ("9", f"apply and remove `{READY}`"),
+              ("10", "close as not planned, reopen, close as not planned"),
+          ]
+          ATTEMPTS, DELAY = 6, 2
+
+
+          class Stop(Exception):
+              pass
+
+
+          state = {"results": {key: "not run" for key, _ in STEPS}, "demo": None, "url": "", "writes": 0, "comments": set(), "cleanup": "", "step": None}
+          env = os.environ.get
+          repo = env("GITHUB_REPOSITORY", "")
+          owner = env("OWNER_LOGIN", "").strip()
+          issues = f"repos/{repo}/issues"
+
+
+          def gh(*args, stdin=None):
+              return subprocess.run(["gh", "api", *args], input=stdin, capture_output=True, text=True)
+
+
+          def read(path, what, missing_ok=False):
+              """One GET. A 404 is None when the caller allows it; any other failure stops the run."""
+              answer = gh(path)
+              if answer.returncode != 0:
+                  if missing_ok and "HTTP 404" in (answer.stderr or ""):
+                      return None
+                  raise Stop(f"stopped: {what} could not be read ({http(answer)})")
+              return json.loads(answer.stdout)
+
+
+          def read_all(path, what):
+              answer = gh("--paginate", "--slurp", path)
+              if answer.returncode != 0:
+                  raise Stop(f"stopped: {what} could not be read ({http(answer)})")
+              return [item for page in json.loads(answer.stdout) for item in page]
+
+
+          def http(answer):
+              found = re.search(r"HTTP (\d{3})", answer.stderr or "")
+              return f"HTTP {found.group(1)}" if found else "no HTTP status"
+
+
+          def may_write(method, path):
+              """The only targets of this run: a new issue, the demo issue, its own comment, the link."""
+              demo = state["demo"]
+              if (method, path) in (("POST", issues), ("POST", f"{issues}/{PARENT}/sub_issues")):
+                  return True
+              if demo and demo != PARENT and (path == f"{issues}/{demo}" or path.startswith(f"{issues}/{demo}/")):
+                  return True
+              return method == "PATCH" and any(path == f"{issues}/comments/{ident}" for ident in state["comments"])
+
+
+          def write(step, method, path, payload=None):
+              if not may_write(method, path):
+                  raise Stop(f"refused: step {step} would write {method} {path}, which is not a target of this run; nothing was sent")
+              args = ["--method", method, path]
+              answer = gh(*args, "--input", "-", stdin=json.dumps(payload)) if payload is not None else gh(*args)
+              if answer.returncode != 0:
+                  state["results"][step] = f"refused by GitHub ({http(answer)})"
+                  raise Stop(f"stopped at step {step}: GitHub refused {method} {path} ({http(answer)}); missing permission?")
+              state["writes"] += 1
+              return json.loads(answer.stdout) if (answer.stdout or "").strip() else None
+
+
+          def check(step, what, user, via, marker_required):
+              """GitHub must attribute a write to the App. Events may carry no App marker; an issue or
+              a comment always does."""
+              user = user or {}
+              login, kind = user.get("login"), user.get("type")
+              slug = (via or {}).get("slug")
+              if login != BOT or kind != "Bot" or (slug != APP if marker_required else slug not in (None, APP)):
+                  raise Stop(
+                      f"identity mismatch at step {step}: GitHub attributes {what} to login {login!r}, "
+                      f"type {kind!r}, App {slug!r}, not {BOT}; stop and tell the owner"
+                  )
+
+
+          def demo_issue():
+              return read(f"{issues}/{state['demo']}", "the demo issue")
+
+
+          def names(issue):
+              return [label.get("name") for label in issue.get("labels") or []]
+
+
+          def events(kind, label=None):
+              found = read_all(f"{issues}/{state['demo']}/events?per_page=100", "the demo issue's events")
+              return [e for e in found if e.get("event") == kind and (label is None or (e.get("label") or {}).get("name") == label)]
+
+
+          def recorded(step, kind, label=None, count=1, act=None):
+              """Return the events of one kind, all by the App. With `act`, make the write first when
+              fewer than `count` exist, then wait for GitHub to record it."""
+              found = events(kind, label)
+              if len(found) < count and act:
+                  act()
+                  for attempt in range(ATTEMPTS):
+                      found = events(kind, label)
+                      if len(found) >= count:
+                          break
+                      time.sleep(DELAY)
+              what = f"the {kind!r} event" + (f" for {label!r}" if label else "")
+              if len(found) < count:
+                  raise Stop(f"stopped at step {step}: GitHub recorded no {what[4:]} on the demo issue")
+              for event in found:
+                  check(step, what, event.get("assigner") or event.get("actor"), event.get("performed_via_github_app"), False)
+              return found
+
+
+          def label_on(step, label):
+              recorded(step, "labeled", label, act=lambda: write(step, "POST", f"{issues}/{state['demo']}/labels", {"labels": [label]}))
+
+
+          def label_off(step, label):
+              quoted = urllib.parse.quote(label, safe="")
+              recorded(step, "unlabeled", label, act=lambda: write(step, "DELETE", f"{issues}/{state['demo']}/labels/{quoted}"))
+              if label in names(demo_issue()):
+                  raise Stop(f"stopped at step {step}: {label!r} is still on the demo issue")
+
+
+          def caller():
+              if env("GITHUB_EVENT_NAME") != "workflow_dispatch":
+                  raise Stop("refused: only a manual dispatch may run the capability test")
+              if not repo or repo != env("EXPECTED_REPOSITORY"):
+                  raise Stop("refused: this workflow runs only in its own repository")
+              if env("GITHUB_REF") != "refs/heads/main":
+                  raise Stop("refused: dispatch the workflow on main")
+              if not owner or env("GITHUB_ACTOR", "").lower() != owner.lower() or env("GITHUB_TRIGGERING_ACTOR", "").lower() != owner.lower():
+                  raise Stop("refused: the caller is not the owner (CONDUCTOR_OWNER_LOGIN); nothing was written")
+              if env("APP_SLUG") != APP:
+                  raise Stop(f"identity mismatch: the token does not belong to the {APP} App; nothing was written")
+
+
+          def parent_ready():
+              parent = read(f"{issues}/{PARENT}", f"record #{PARENT}")
+              if parent.get("number") != PARENT or "pull_request" in parent or not str(parent.get("url", "")).lower().endswith(f"/{issues}/{PARENT}".lower()):
+                  raise Stop(f"wrong target: #{PARENT} is not an issue of {repo}; nothing was written")
+              if parent.get("state") != "open":
+                  raise Stop(f"precondition: record #{PARENT} is not open")
+              if READY not in names(parent):
+                  raise Stop(f"precondition: record #{PARENT} does not carry {READY!r}")
+
+
+          def preconditions():
+              """Everything criterion 9 depends on, checked before the first write."""
+              mode = env("APPROVAL_MODE", "").strip().lower()
+              if mode != "auto":
+                  raise Stop(f"precondition: CONDUCTOR_APPROVAL_MODE is {mode or 'unset'!r}, not 'auto'")
+              cap = env("PRIORITY_CAP", "").strip()
+              if cap and (cap not in PRIORITIES or PRIORITIES.index(PRIORITY) < PRIORITIES.index(cap)):
+                  raise Stop(f"precondition: {PRIORITY!r} is not within the assistant priority cap {cap!r}")
+              if KIND in [c.strip() for c in env("OWNER_CATEGORIES", "").split(",")]:
+                  raise Stop(f"precondition: {KIND!r} is an owner-only category, so the demo issue would not be an eligible child")
+              for label in (NEUTRAL, PRIORITY, KIND, READY):
+                  if read(f"repos/{repo}/labels/{urllib.parse.quote(label, safe='')}", f"label {label!r}", missing_ok=True) is None:
+                      raise Stop(f"precondition: label {label!r} does not exist in {repo}")
+              parent_ready()
+
+
+          def find_demo():
+              found = read_all(f"{issues}?state=all&per_page=100", "the repository's issues")
+              mine = [i for i in found if i.get("title") == TITLE and "pull_request" not in i and (i.get("user") or {}).get("login") == BOT]
+              if len(mine) > 1:
+                  raise Stop(f"stopped: {len(mine)} demo issues exist ({', '.join('#' + str(i.get('number')) for i in mine)}); tell the owner")
+              return mine[0] if mine else None
+
+
+          def step_create():
+              demo = find_demo()
+              if demo is None:
+                  demo = write("2", "POST", issues, {"title": TITLE, "body": BODY_FIRST})
+              number = demo.get("number")
+              if not isinstance(number, int) or number == PARENT or "pull_request" in demo or not str(demo.get("url", "")).lower().endswith(f"/{issues}/{number}".lower()):
+                  raise Stop(f"wrong target at step 2: GitHub's answer is not a new issue of {repo}")
+              state["demo"], state["url"] = number, demo.get("html_url", "")
+              check("2", f"issue #{number}", demo.get("user"), demo.get("performed_via_github_app"), True)
+              return demo
+
+
+          def step_link(demo):
+              path = f"{issues}/{state['demo']}/parent"
+              parent = read(path, "the demo issue's parent", missing_ok=True)
+              if parent is None:
+                  write("3", "POST", f"{issues}/{PARENT}/sub_issues", {"sub_issue_id": demo["id"]})
+                  parent = read(path, "the demo issue's parent", missing_ok=True)
+              if (parent or {}).get("number") != PARENT:
+                  raise Stop(f"stopped at step 3: the demo issue's parent is {(parent or {}).get('number')!r}, not #{PARENT}")
+              recorded("3", "parent_issue_added")
+
+
+          def step_edit():
+              number = state["demo"]
+              if (demo_issue().get("body") or "").strip() != BODY_EDITED:
+                  write("4", "PATCH", f"{issues}/{number}", {"body": BODY_EDITED})
+              if (demo_issue().get("body") or "").strip() != BODY_EDITED:
+                  raise Stop("stopped at step 4: the demo issue's body is not the edited text")
+              query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){editor{__typename login}}}}"
+              name_owner, name = repo.split("/", 1)
+              answer = gh("graphql", "-f", f"query={query}", "-f", f"owner={name_owner}", "-f", f"name={name}", "-F", f"number={number}")
+              if answer.returncode != 0:
+                  raise Stop(f"stopped at step 4: the body's editor could not be read ({http(answer)})")
+              editor = (((json.loads(answer.stdout).get("data") or {}).get("repository") or {}).get("issue") or {}).get("editor") or {}
+              if editor.get("__typename") != "Bot" or editor.get("login") not in (APP, BOT):
+                  raise Stop(
+                      f"identity mismatch at step 4: GitHub names {editor.get('login')!r}, type "
+                      f"{editor.get('__typename')!r}, as the body's last editor, not {BOT}; stop and tell the owner"
+                  )
+
+
+          def step_comment():
+              number = state["demo"]
+              found = read_all(f"{issues}/{number}/comments?per_page=100", "the demo issue's comments")
+              mine = [c for c in found if (c.get("user") or {}).get("login") == BOT and (c.get("body") or "").strip() in (COMMENT_FIRST, COMMENT_EDITED)]
+              if len(mine) > 1:
+                  raise Stop("stopped at step 5: the demo issue carries more than one test comment")
+              comment = mine[0] if mine else write("5", "POST", f"{issues}/{number}/comments", {"body": COMMENT_FIRST})
+              check("5", "the comment", comment.get("user"), comment.get("performed_via_github_app"), True)
+              if (comment.get("body") or "").strip() != COMMENT_EDITED:
+                  state["comments"].add(comment["id"])
+                  comment = write("5", "PATCH", f"{issues}/comments/{comment['id']}", {"body": COMMENT_EDITED})
+                  check("5", "the edited comment", comment.get("user"), comment.get("performed_via_github_app"), True)
+              if (comment.get("body") or "").strip() != COMMENT_EDITED:
+                  raise Stop("stopped at step 5: the comment is not the edited text")
+
+
+          def step_neutral():
+              label_on("6", NEUTRAL)
+              label_off("6", NEUTRAL)
+
+
+          def step_classify():
+              for label in (PRIORITY, KIND):
+                  label_on("7", label)
+              present = names(demo_issue())
+              if PRIORITY not in present or KIND not in present or len([p for p in PRIORITIES if p in present]) != 1:
+                  raise Stop(f"stopped at step 7: the demo issue's labels are {present}, not one priority {PRIORITY!r} and {KIND!r}")
+
+
+          def step_assign():
+              number = state["demo"]
+              recorded("8", "assigned", act=lambda: write("8", "POST", f"{issues}/{number}/assignees", {"assignees": [owner]}))
+              recorded("8", "unassigned", act=lambda: write("8", "DELETE", f"{issues}/{number}/assignees", {"assignees": [owner]}))
+              if demo_issue().get("assignees"):
+                  raise Stop("stopped at step 8: the demo issue still has an assignee")
+
+
+          def step_ready():
+              def apply():
+                  # An eligible child of a readied parent, read again at the moment of the write.
+                  parent_ready()
+                  present = names(demo_issue())
+                  if PRIORITY not in present or KIND not in present:
+                      raise Stop(f"stopped at step 9: the demo issue lacks {PRIORITY!r} or {KIND!r}, so it is not an eligible child")
+                  if (read(f"{issues}/{state['demo']}/parent", "the demo issue's parent", missing_ok=True) or {}).get("number") != PARENT:
+                      raise Stop(f"stopped at step 9: the demo issue is not a sub-issue of #{PARENT}")
+                  write("9", "POST", f"{issues}/{state['demo']}/labels", {"labels": [READY]})
+
+              recorded("9", "labeled", READY, act=apply)
+              label_off("9", READY)
+
+
+          def step_close():
+              path = f"{issues}/{state['demo']}"
+              close = lambda: write("10", "PATCH", path, {"state": "closed", "state_reason": "not_planned"})
+              recorded("10", "closed", act=close)
+              recorded("10", "reopened", act=lambda: write("10", "PATCH", path, {"state": "open"}))
+              recorded("10", "closed", count=2, act=close)
+              final = demo_issue()
+              if final.get("state") != "closed" or final.get("state_reason") != "not_planned":
+                  raise Stop(f"stopped at step 10: the demo issue ends {final.get('state')!r}, reason {final.get('state_reason')!r}, not closed as not planned")
+
+
+          def cleanup():
+              """After a failure: the demo issue must not keep the readiness label."""
+              if not state["demo"]:
+                  return "no demo issue was reached, so there is nothing to clean up"
+              path = f"{issues}/{state['demo']}"
+              answer = gh(path)
+              if answer.returncode != 0:
+                  return f"could not read the demo issue ({http(answer)}); check by hand that it does not carry `{READY}`"
+              if READY not in names(json.loads(answer.stdout)):
+                  return f"`{READY}` is not on the demo issue"
+              answer = gh("--method", "DELETE", f"{path}/labels/{urllib.parse.quote(READY, safe='')}")
+              if answer.returncode != 0:
+                  return f"`{READY}` is STILL on the demo issue and could not be removed ({http(answer)}); remove it by hand now"
+              return f"`{READY}` was on the demo issue and has been removed"
+
+
+          def summary(result, error):
+              rows = "\n".join(f"| {key} | {name} | {state['results'][key]} |" for key, name in STEPS)
+              return (
+                  f"Claude App capability test: {result}\n\n"
+                  + (f"- Stopped: {error}\n- Cleanup: {state['cleanup']}\n" if error else "")
+                  + f"- Demo issue: {state['url'] or 'none'}\n- Writes in this run: {state['writes']}\n"
+                  "- Token requested with: `issues: write` only\n"
+                  "- Permissions the installation grants: unknown (no endpoint an installation token can call returns them)\n\n"
+                  "| Step | Write | Result |\n| --- | --- | --- |\n" + rows + "\n"
+              )
+
+
+          def main():
+              caller()
+              preconditions()
+              demo = {}
+              steps = (
+                  ("2", lambda: demo.update(step_create())), ("3", lambda: step_link(demo)), ("4", step_edit),
+                  ("5", step_comment), ("6", step_neutral), ("7", step_classify), ("8", step_assign),
+                  ("9", step_ready), ("10", step_close),
+              )
+              for key, step in steps:
+                  state["step"] = key
+                  step()
+                  state["results"][key] = "passed"
+
+
+          error = None
+          try:
+              main()
+          except Stop as stop:
+              error = str(stop)
+          except Exception as unexpected:  # an answer GitHub gave in a shape this script does not read
+              error = f"stopped: unexpected answer ({type(unexpected).__name__}: {unexpected})"
+          result = "failed" if error else ("completed" if state["writes"] else "verified-earlier")
+          if error:
+              if state["results"].get(state["step"]) == "not run":
+                  state["results"][state["step"]] = "failed"
+              state["cleanup"] = cleanup()
+              print(f"::error::{error}")
+              print(f"cleanup: {state['cleanup']}")
+          print(f"{result}: {state['url'] or 'no demo issue'}")
+          with open(env("GITHUB_STEP_SUMMARY", os.devnull), "a", encoding="utf-8") as out:
+              out.write(summary(result, error))
+          if error:
+              sys.exit(1)
+          with open(env("GITHUB_OUTPUT", os.devnull), "a", encoding="utf-8") as out:
+              out.write(f"demo-url={state['url']}\nresult={result}\n")
