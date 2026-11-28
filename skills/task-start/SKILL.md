@@ -28,7 +28,16 @@ platform do.
 4. Branch from the project's integration branch (`main` unless `AGENTS.md` names another) as
    `<assistant>/<slug>-<date>`, or keep the branch the runtime assigned. Record the baseline
    in your first message: base SHA, dirty state, known failures.
-5. Keep three lines in view for the rest of the task: the task and its allowed paths; what
+5. Before the first write, settle three separate facts (`AGENTS.md`, Identity and
+   attribution; `docs/assistant-attribution.md` where the project has it). Role: what the
+   record and its assignment make you. Authority: the owner's message, the mode or the
+   record's scope that allows each act you plan. Actor: the account GitHub will record for
+   your writes, which is your App only for a write it has been shown to make, and otherwise
+   the login you work under. Say the route in your first message. An ordinary write through
+   another account carries a credit in its text: the assistant, what it did, the submitting
+   account. An act whose actor a gate or a check reads (an owner Ready, a required review, a
+   Grok Ready or review) is never yours through another account: hand it to that actor.
+6. Keep three lines in view for the rest of the task: the task and its allowed paths; what
    is never yours (merging, pushing to the integration branch, rewriting history, and any
    label, assignment, close or state of an issue); how to finish (`task-finish`). Work only
    inside the allowed paths; anything found outside them is left for `task-finish`.

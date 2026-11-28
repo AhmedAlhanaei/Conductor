@@ -45,6 +45,32 @@ distinct records and branches, with a conflict review for anything they share. I
 readied sub-issue is the go-ahead to start its thread; in `manual` the Planner proposes the
 thread and waits for the owner.
 
+## Identity and attribution
+
+GitHub records the account that performed a write, not the assistant that composed it. Three
+facts are separate, each with its own evidence: the role (the record and its assignment), the
+authority for the act (the owner's words, the mode, the record's scope) and the actor (the
+author, or the actor and App, that GitHub shows on the event). Procedure, examples and what
+each assistant has shown: `docs/assistant-attribution.md`; what an assistant repeats with its
+own App: `docs/assistant-identity-handoff.md`.
+
+- App route: where the actor matters and the assistant's App has been shown to make that
+  write, the write goes through the App. Every Grok Ready and review is
+  `grok-conductor[bot]`'s (ADR 0009); a Codex Planner comment is `codex-conductor[bot]`'s
+  (`docs/codex-planner-comments.md`). A write the App has not been shown to make is pending,
+  not available.
+- Owner-account route: ordinary authorized work (issues, comments, commits, pull requests) may
+  go through another account, usually the owner's. The submitted text names the assistant,
+  what it did and the submitting account ("Claude implemented the change. Opened through
+  `alhanaei`."); a label or another write without text is credited in the record's next
+  comment. A Claude cloud session always writes this way.
+- A credit or a mention records contribution and nothing else: it satisfies no owner gate, no
+  check on the actor, no independent review and no required App identity. An event by the
+  owner's login does not show that the owner acted; the owner's decision is the message the
+  record's comment names.
+- Credit only the assistant that did the work, and never write through another assistant's
+  identity.
+
 ## Owner gates
 
 The owner's three decisions are two gates, Ready and Merge, and Reject. Filing is open to
@@ -175,6 +201,8 @@ labelled together with one comment naming the round.
 3. Branch from the integration branch. Record the baseline: base SHA, dirty state, known
    failures.
 4. Stay inside the record's allowed paths. Take exactly the task you were given.
+5. Before the first write, name your role, the authority for the act and the route it takes
+   (Identity and attribution); an act that belongs to another actor is handed to that actor.
 
 ## Task finish
 
@@ -203,7 +231,10 @@ labelled together with one comment naming the round.
    login counts only when it starts `Reviewer: <runtime>` (ADR 0011). Any other record's
    review stays advisory: it follows the merge on `main`, by a runtime other than the
    Implementer's; findings become its sub-issues or Backlog lines.
-5. Post no milestone comment: the pull request carries the head SHA, the checks and the
+5. Read back the actor GitHub recorded for each write: add a missing credit to its text;
+   report a wrong actor on a gate, a review or an App-only write with its evidence, and never
+   repeat the write to change its history.
+6. Post no milestone comment: the pull request carries the head SHA, the checks and the
    proposals. When stopping instead, also when context or quota runs low, open no pull
    request and post one handoff comment on the record: the blocker, the next executable step
    and anything still unpushed or local. A finish without evidence on the exact head is a
@@ -218,7 +249,8 @@ request; open a second pull request at a head commit another open pull request a
 apply `status:ready` to a top-level record on its own judgment; start a record that is not
 Ready; widen scope; deploy, spend, change credentials or access, share non-public data, or
 publish outside GitHub from a session; skip, disable or quarantine a check to get green; rotate
-accounts or evade quotas; put credentials in these files.
+accounts or evade quotas; write through another assistant's identity or credit an assistant
+for work it did not do; put credentials in these files.
 
 ## Verification contract
 

@@ -62,10 +62,19 @@ branch with a recorded baseline; [`task-finish`](skills/task-finish/SKILL.md) ru
 contract on the exact head, opens one pull request from the
 [template](.github/pull_request_template.md) with the evidence ledger and arms auto-merge in
 `auto`. Neither writes a claim, a milestone, a label or an assignment; a session that stops
-without a pull request posts one handoff comment. [`record-review`](skills/record-review/SKILL.md)
+without a pull request posts one handoff comment. Both check the role, the authority and the
+account GitHub records for a write. [`record-review`](skills/record-review/SKILL.md)
 is the Reviewer's: one native review of a pull request's head against its record
 ([Task start](AGENTS.md#task-start), [Task finish](AGENTS.md#task-finish),
 [Never](AGENTS.md#never)).
+
+**Identity and attribution.** GitHub records the account that made a write, not the assistant
+that composed it. An assistant uses its own GitHub App where the actor matters and the App has
+been shown to make that write; ordinary work may go through the owner's account with a credit
+in the text, which satisfies no gate and no review
+([Identity and attribution](AGENTS.md#identity-and-attribution),
+[`docs/assistant-attribution.md`](docs/assistant-attribution.md),
+[`docs/assistant-identity-handoff.md`](docs/assistant-identity-handoff.md)).
 
 ## Try it
 
@@ -252,6 +261,7 @@ that breaks the rule; the record, the pull request and the review are where it s
 | No force-push or rewritten history on a task branch | Trust only |
 | No deploy, spend, credential or access change, non-public data, publishing outside GitHub, account rotation or credentials in files | Trust only |
 | Nothing starts on a Parked or Closed project, or on a record that is not Ready | Trust only at the start; `linked-task` stops the pull request of a record that is not Ready |
+| Where the actor matters, a write goes through the assistant's verified App; a write through another account credits the assistant in its text; a credit satisfies no gate | The App workflows (`codex-planner-comment.yml`, `claude-identity.yml`) fail unless GitHub names the App's bot as author, and `linked-task` reads the actor of an owner Ready and the author of a required review. The credit, and which assistant composed a write made under the owner's login: trust only |
 | Scheduled checks only when asked and read-only, apart from the auto-start check and its limits (ADR 0013); a record that must wait carries the native "Blocked by" link; say what is missing and stop | Trust only |
 
 ## Status
@@ -281,4 +291,6 @@ and anything that would need a generator, a runtime or a second copy of the rule
 | `skills/task-start/SKILL.md`, `skills/task-finish/SKILL.md`, `skills/record-review/SKILL.md` | The three skills as prose steps: the two task boundaries of the Implementer and the Reviewer's review of a head; upload them as account skills. |
 | `docs/adr/0002` to `0013` | Decision history. ADR 0006 records the shrink to this shape; ADR 0007 the review gate; ADR 0008 the thresholds in `auto`; ADR 0009 Grok as a readying and reviewing identity; ADR 0010 the checker called at a tag; ADR 0011 the states of a record and who moves them; ADR 0012 the release step, a candidate tag tested on an adopter before `v1` moves; ADR 0013 the auto-start check, accepted and not yet switched on. |
 | `docs/auto-start-check.md` | The instruction text of the one scheduled check that is not read-only: it has the Planner start the thread of a Ready record that is free to start. The prompt of a claude.ai scheduled task, not a workflow; a change to it is a pull request. |
+| `docs/assistant-attribution.md` | The attribution procedure: role, authority and actor, what each assistant's App has been shown to do and what is pending, the credit texts, three walk-throughs and the finish check. |
+| `docs/assistant-identity-handoff.md` | What an assistant repeats to get and prove its own App identity: the pattern, the variable and secret names per assistant, and what each still has to show. |
 | `docs/lifecycle.md` | Reference for the states of a record; the page governs. |
