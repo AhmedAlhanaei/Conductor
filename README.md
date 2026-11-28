@@ -82,7 +82,7 @@ is the Reviewer's: one native review of a pull request's head against its record
      pull_request:
        types: [opened, edited, synchronize, reopened]
      pull_request_review:
-       types: [submitted]
+       types: [submitted, dismissed, edited]
    permissions:
      actions: write
      contents: read
@@ -93,9 +93,9 @@ is the Reviewer's: one native review of a pull request's head against its record
        uses: AhmedAlhanaei/Conductor/.github/workflows/pr-policy.yml@v1
    ```
 
-   `actions: write` is for one call: when a review is submitted on a task that requires
-   one, the check re-runs its own run of the `pull_request` event on that head, which is the
-   run the merge follows. Without it a review is read but someone must re-run the check.
+   `actions: write` is for one call: when a review is submitted, dismissed or edited on a
+   task that requires one, the check re-runs its own run of the `pull_request` event on that
+   head, which is the run the merge follows. Without it a review is read but someone must re-run the check.
    The ref after `@` is a tag or a commit SHA, never `main` or another branch: `main` is
    where changes are staged. `v1` moves to a release only after a release candidate tag
    passed on one adopter; an exact tag such as `v1.0.0`, or a SHA, never moves
