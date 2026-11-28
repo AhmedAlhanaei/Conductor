@@ -144,7 +144,13 @@ covers unless its scope or risk changed.
   record.
 - A scheduled check is created only when asked, read-only, with its source, due time,
   recipient and stop condition; a missed update is unknown activity, not authority to start,
-  reassign or publish.
+  reassign or publish. One check is not read-only (ADR 0013): where
+  `docs/auto-start-check.md` sets a repository `live`, it has the Planner start the thread of
+  a Ready leaf record that is free to start, whoever readied it, and assign it; in a `manual`
+  repository it proposes the thread. It writes nothing else.
+- A record that must wait for another carries GitHub's native "Blocked by" link; the Planner
+  names it when filing, and the owner sets it where a session cannot. A dependency written
+  only in prose holds no record back.
 
 ## Grilling and splitting
 

@@ -252,7 +252,7 @@ that breaks the rule; the record, the pull request and the review are where it s
 | No force-push or rewritten history on a task branch | Trust only |
 | No deploy, spend, credential or access change, non-public data, publishing outside GitHub, account rotation or credentials in files | Trust only |
 | Nothing starts on a Parked or Closed project, or on a record that is not Ready | Trust only at the start; `linked-task` stops the pull request of a record that is not Ready |
-| Scheduled checks only when asked; say what is missing and stop | Trust only |
+| Scheduled checks only when asked and read-only, apart from the auto-start check and its limits (ADR 0013); a record that must wait carries the native "Blocked by" link; say what is missing and stop | Trust only |
 
 ## Status
 
@@ -279,5 +279,6 @@ and anything that would need a generator, a runtime or a second copy of the rule
 | `.github/ISSUE_TEMPLATE/task.yml` | The task form: title, Problem and Parent task required at filing, the Ready facts before Ready, and "Success criteria (parent only)". |
 | `.github/pull_request_template.md` | `Closes #n`, the verification ledger, merge danger, review line, "Found and left". |
 | `skills/task-start/SKILL.md`, `skills/task-finish/SKILL.md`, `skills/record-review/SKILL.md` | The three skills as prose steps: the two task boundaries of the Implementer and the Reviewer's review of a head; upload them as account skills. |
-| `docs/adr/0002` to `0012` | Decision history. ADR 0006 records the shrink to this shape; ADR 0007 the review gate; ADR 0008 the thresholds in `auto`; ADR 0009 Grok as a readying and reviewing identity; ADR 0010 the checker called at a tag; ADR 0011 the states of a record and who moves them; ADR 0012 the release step, a candidate tag tested on an adopter before `v1` moves. |
+| `docs/adr/0002` to `0013` | Decision history. ADR 0006 records the shrink to this shape; ADR 0007 the review gate; ADR 0008 the thresholds in `auto`; ADR 0009 Grok as a readying and reviewing identity; ADR 0010 the checker called at a tag; ADR 0011 the states of a record and who moves them; ADR 0012 the release step, a candidate tag tested on an adopter before `v1` moves; ADR 0013 the auto-start check, accepted and not yet switched on. |
+| `docs/auto-start-check.md` | The instruction text of the one scheduled check that is not read-only: it has the Planner start the thread of a Ready record that is free to start. The prompt of a claude.ai scheduled task, not a workflow; a change to it is a pull request. |
 | `docs/lifecycle.md` | Reference for the states of a record; the page governs. |

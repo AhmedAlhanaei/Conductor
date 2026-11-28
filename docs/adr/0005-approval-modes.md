@@ -11,6 +11,8 @@
   categories above which the Ready gate on a sub-issue returns to the owner)
 - Amended by: ADR 0011 (who moves each state in each mode replaces the table of §2; filing
   leaves it, and the Planner may reopen a record after a revert in `auto`)
+- Amended by: ADR 0013 (in `auto` the Ready on any leaf record, the owner's on a top-level or
+  owner-only record included, is the go-ahead to start its thread; a scheduled check starts it)
 - Roles: decision grilled by the Planner (project coordinator); this record written by the
   Implementer (a project thread)
 

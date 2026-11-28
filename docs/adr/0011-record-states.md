@@ -14,6 +14,8 @@
   reviews) and ADR 0010 (the caller's trigger; the first tag)
 - Amended by: ADR 0012 (the first tag on the merge commit of #128 is `v1-rc1`; `v1` follows on
   the same commit)
+- Amended by: ADR 0013 (the Planner's move from Ready to Implement may be prompted by the
+  auto-start check instead of the owner's message)
 - Roles: decision grilled by the Planner (project threads "Find better status tracking" and
   "Check open issues for conflicts"); this record written by the Implementer (a project
   thread)
