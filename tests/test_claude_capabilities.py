@@ -110,7 +110,8 @@ class FakeGitHub:
         return {
             "id": 500000 + number, "number": number, "title": title, "body": body, "state": "open",
             "state_reason": None, "labels": [{"name": name} for name in labels], "assignees": [],
-            "user": self.user(actor), "performed_via_github_app": self.via(actor),
+            # GitHub names the App on a comment, and leaves this empty on an issue an App opens.
+            "user": self.user(actor), "performed_via_github_app": self.via(actor) if actor.get("issue_marker") else None,
             "url": f"https://api.github.com/repos/{REPO}/issues/{number}",
             "html_url": f"https://github.com/{REPO}/issues/{number}",
             "_parent": None, "_events": [], "_comments": [], "_editor": None,
@@ -525,9 +526,38 @@ class WrongActor(ProbeCase):
         other = {"login": "codex-conductor[bot]", "type": "Bot", "app": "codex-conductor"}
         self.failed(probe(FakeGitHub(actors={"assign": other})), "identity mismatch at step 8")
 
-    def test_an_issue_or_a_comment_without_the_app_marker_fails(self):
-        for op, step in (("create", "2"), ("comment", "5")):
-            self.failed(probe(FakeGitHub(actors={op: {**APP_ACTOR, "app": None}})), f"identity mismatch at step {step}")
+    def test_a_comment_without_the_app_marker_fails(self):
+        self.failed(probe(FakeGitHub(actors={"comment": {**APP_ACTOR, "app": None}})), "identity mismatch at step 5")
+
+    def test_an_issue_without_the_app_marker_is_the_apps_as_github_answers_it(self):
+        github = FakeGitHub()
+        run = probe(github)
+        self.assertEqual(run.code, 0, run.stdout)
+        self.assertIsNone(github.demo()["performed_via_github_app"])
+
+    def test_an_issue_with_the_apps_marker_passes(self):
+        run = probe(FakeGitHub(actors={"create": {**APP_ACTOR, "issue_marker": True}}))
+        self.assertEqual(run.code, 0, run.stdout)
+
+    def test_a_created_issue_with_another_apps_marker_fails(self):
+        github = FakeGitHub(actors={"create": {**APP_ACTOR, "app": "grok-by-xai", "issue_marker": True}})
+        self.failed(probe(github), "identity mismatch at step 2")
+        self.assertEqual(github.attempted, ["create"])
+
+    def test_a_found_issue_with_another_apps_marker_fails_and_nothing_is_written(self):
+        github = FakeGitHub()
+        github.add(github.issue(150, TITLE, {**APP_ACTOR, "app": "grok-by-xai", "issue_marker": True}))
+        self.failed(probe(github), "identity mismatch at step 2")
+        self.assertEqual(github.written(), [])
+
+    def test_a_found_issue_without_a_marker_is_resumed_at_the_link(self):
+        # The state the first live run left: the issue exists, nothing else does.
+        github = FakeGitHub()
+        github.add(github.issue(170, TITLE, APP_ACTOR, body="first"))
+        run = probe(github)
+        self.assertEqual(run.code, 0, run.stdout)
+        self.assertEqual(github.attempted, OPS[1:])
+        self.ended_clean(github)
 
     def test_an_existing_demo_issue_under_another_parent_stops(self):
         github = FakeGitHub()

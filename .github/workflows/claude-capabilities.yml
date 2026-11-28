@@ -4,6 +4,9 @@
 # assign and unassign, the readiness label on and off, close, reopen, close. After each
 # write it reads GitHub's own answer and fails unless the write is attributed to
 # `claude-conductor[bot]`, type `Bot`, through that App where GitHub returns the marker.
+# GitHub names the App (`performed_via_github_app`) on a comment an App posts and leaves the
+# field empty on an issue an App opens (#171), so the marker is required on the comment only;
+# anywhere else it may be absent, and a marker naming another App always fails.
 #
 # What a green run shows: which App wrote. It does not show who decided: the caller check
 # allows the owner's login, and every claude.ai session acts as that login too. The
@@ -179,8 +182,8 @@ jobs:
 
 
           def check(step, what, user, via, marker_required):
-              """GitHub must attribute a write to the App. Events may carry no App marker; an issue or
-              a comment always does."""
+              """GitHub must attribute a write to the App. A comment always carries the App marker;
+              an issue an App opens carries none (#171), and an event may carry none."""
               user = user or {}
               login, kind = user.get("login"), user.get("type")
               slug = (via or {}).get("slug")
@@ -289,7 +292,7 @@ jobs:
               if not isinstance(number, int) or number == PARENT or "pull_request" in demo or not str(demo.get("url", "")).lower().endswith(f"/{issues}/{number}".lower()):
                   raise Stop(f"wrong target at step 2: GitHub's answer is not a new issue of {repo}")
               state["demo"], state["url"] = number, demo.get("html_url", "")
-              check("2", f"issue #{number}", demo.get("user"), demo.get("performed_via_github_app"), True)
+              check("2", f"issue #{number}", demo.get("user"), demo.get("performed_via_github_app"), False)
               return demo
 
 
