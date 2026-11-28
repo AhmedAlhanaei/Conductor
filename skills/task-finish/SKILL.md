@@ -23,8 +23,9 @@ report: this skill posts no milestone, claim or release comment.
 4. Push the branch and open one pull request against the integration branch from the
    repository's template: `Closes #n`; what changed and why; the verification ledger with
    tested SHAs; the runtime that implemented it; merge danger (two-way or one-way door,
-   blast radius); a "Found and left" block with every finding outside the task's scope, one
-   line each with a suggested priority. Fill the criterion-to-evidence table from the
+   blast radius); the credit when the pull request is opened through another account
+   ("Claude implemented the change. Opened through `<login>`."); a "Found and left" block
+   with every finding outside the task's scope, one line each with a suggested priority. Fill the criterion-to-evidence table from the
    record's numbered acceptance criteria, one row each with evidence, result and tested
    SHA, before the pull request opens. Nothing found mid-task is done here.
 5. When the project's approval mode is `auto` and the task is a sub-issue of a readied
@@ -36,7 +37,14 @@ report: this skill posts no milestone, claim or release comment.
    push within the record's push budget, and update the ledger to the new head. Where the
    record requires a review, wait for the Reviewer's review of the head; when `main` moved
    under the pull request, update the branch with `main`.
-7. Stopping instead (`task-finish --stopped`), when context, quota, access or the owner's
+7. Check attribution before reporting. For each write of the task (the pull request, a
+   comment, a dispatched App run), read back the actor GitHub recorded and compare it with
+   the route named at the start. An owner-account write carries its credit in the text: add
+   it where it is missing. An App write names the App's bot, type `Bot`, as author or as the
+   actor of that exact event: link it. A wrong actor on a gate, a review or an App-only
+   write is reported to the owner with its evidence; never repeat a write to change how its
+   history looks. A credit satisfies no gate and no review.
+8. Stopping instead (`task-finish --stopped`), when context, quota, access or the owner's
    decision runs out: open no pull request and post one handoff comment on #n, the only
    comment this skill writes. Gather every fact from GitHub and `git` (the record, `git
    log`, `git status`), never from memory or chat; write `unknown` for what is not known.
@@ -49,7 +57,7 @@ report: this skill posts no milestone, claim or release comment.
    <one sentence a fresh session can execute>.
    ```
 
-8. The closing report (`task-finish --report`) is the Planner's, never the Implementer's:
+9. The closing report (`task-finish --report`) is the Planner's, never the Implementer's:
    when the last child of a tracking or top-level parent closes, one comment on the parent,
    every fact read from GitHub. A pull request is accepted (merged and not reverted within
    14 days), closed unmerged, reverted or pending; only a record is Rejected. In approval
