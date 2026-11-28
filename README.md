@@ -18,7 +18,8 @@ its "What is live today" table were written before ADR 0011 and are behind on th
 ## How it works
 
 **Task records.** Every change starts from a GitHub issue filed from the
-[task form](.github/ISSUE_TEMPLATE/task.yml) with one priority (`P0` to `P3`), one category
+[task form](.github/ISSUE_TEMPLATE/task.yml), which requires only a title, the problem and
+the parent task. Before Ready the record carries one priority (`P0` to `P3`), one category
 (`kind:*`) and the Ready facts: bounded outcome, acceptance criteria with the test for each,
 non-goals, allowed paths, budget and stop conditions. A plan agreed in chat is not a record
 ([Task records](AGENTS.md#task-records)).
@@ -213,7 +214,7 @@ that breaks the rule; the record, the pull request and the review are where it s
 | A pull request closes exactly one task | `linked-task` |
 | That task is open, with one priority, one category, and neither `blocked:owner` nor `kind:tracking` | `linked-task` |
 | That task carries `status:ready` (owner gate Ready) | `linked-task` |
-| A sub-issue's parent is open with a category and a priority, `blocked:owner` or `kind:tracking`; in `auto` the parent is Ready too | `linked-task` |
+| A sub-issue's parent is open with a category and a priority or `kind:tracking`, with or without `blocked:owner` beside the priority; in `auto` the parent is Ready too | `linked-task` |
 | In `auto`, a task above the priority cap or in an owner-only category was readied by the owner | `linked-task`, when a threshold variable is set. It compares the login that last applied the label, so it cannot tell the owner from a session acting through the owner's account |
 | In `auto`, a pull request targets the integration branch; only the promotion targets the default branch | `linked-task` |
 | One branch, one head, one pull request; no second pull request at the same head | `linked-task` |
@@ -227,14 +228,14 @@ that breaks the rule; the record, the pull request and the review are where it s
 | Merge by hand; mark a draft ready; approve in place of the owner's Merge gate (a Reviewer's native review of a head is allowed) | Trust only. Branch protection limits a hand merge to a green pull request, and with approvals off an approval changes nothing |
 | Edit branch protection, required checks or variables | GitHub native (admin permission) for an assistant with its own identity; trust only for a session acting through the owner's account |
 | Skip, disable or quarantine a check to get green | Branch protection keeps the two check names required; a pull request that edits what `verify` runs is not detected: trust only |
-| The Ready facts are filled in | GitHub native (required fields of the task form) at filing; their content, and an issue filed without the form: trust only |
+| A record is filed with a title, the problem and its parent; the Ready facts are filled in before Ready | GitHub native (the three required fields of the task form) at filing through the form. The Ready facts, their content, and an issue filed without the form: trust only; `linked-task` reads labels, not issue body fields |
 | Ready applied with a comment naming the approving message; approval only from the owner's own words | Trust only |
 | `status:ready` on a top-level record is the owner's: applied by the owner, or by a session on the owner's own message naming the record, never on a session's judgment | Trust only below the thresholds |
 | A record's state is read by the ordered rule; nobody writes it | Nothing to enforce: the state is a reading of GitHub facts, not a field. `linked-task` holds the Ready fact (`status:ready`); the checks and auto-merge are the Merge and Done facts |
 | Who moves each state; the Implementer moves none; the Planner assigns the issue when it starts the thread | Trust only, apart from the Ready and Merge rows above |
-| Reject is the owner's decision, with a reason; a parent with a finished child closes as Done and its unfinished children are Rejected | Trust only |
-| Blocked is `blocked:owner` beside a priority | Trust only. `linked-task` refuses a pull request that closes a task carrying `blocked:owner` |
-| `P2` and `P3` records without `review:required` may merge unread; the weekly backlog review lists them | GitHub native (auto-merge) for the merge. The list: not produced yet; `backlog-review.yml` gains it in [#128](https://github.com/AhmedAlhanaei/Conductor/issues/128) |
+| Reject is the owner's decision: closed as not planned or duplicate, by the owner or on the owner's quoted words, with one sentence giving the reason; a parent with a finished child closes as Done and its unfinished children are Rejected | Trust only |
+| Blocked is `blocked:owner` beside a priority, never in place of one | `linked-task`: a task, its parent or a referenced record needs one priority whether or not it carries `blocked:owner`, and a pull request that closes a task carrying it is refused. The comment saying what is awaited: trust only |
+| `P2` and `P3` records without `review:required` may merge unread; the weekly backlog review lists them | GitHub native (auto-merge) for the merge. The list: the weekly report of `backlog-review.yml`, which names the pull requests merged since 2026-11-23 with no review and the open ones whose head has waited more than `CONDUCTOR_STALE_DAYS`; reading them afterwards is trust only |
 | Three levels; related work is a sub-issue; the Planner's closing report on the parent | Trust only |
 | Selection order; `agent:*` labels; no claim, release or milestone comment from the Implementer; one handoff comment when a session stops without a pull request | Trust only |
 | One role per session; the Planner and the Reviewer never push; at most two threads in parallel | Trust only |
@@ -270,7 +271,7 @@ and anything that would need a generator, a runtime or a second copy of the rule
 | `.github/workflows/ci.yml` | The `verify` check: `git diff --check`, `actionlint` and the checker tests. A project with code replaces the steps with its own verification contract. |
 | `tests/test_pr_policy.py` | Standard-library regression tests that run the checker embedded in `pr-policy.yml` against faked `gh` answers; no network. |
 | `.github/workflows/backlog-review.yml` | Optional weekly read-only backlog report. |
-| `.github/ISSUE_TEMPLATE/task.yml` | The task form with the Ready facts. |
+| `.github/ISSUE_TEMPLATE/task.yml` | The task form: title, Problem and Parent task required at filing, the Ready facts before Ready, and "Success criteria (parent only)". |
 | `.github/pull_request_template.md` | `Closes #n`, the verification ledger, merge danger, review line, "Found and left". |
 | `skills/task-start/SKILL.md`, `skills/task-finish/SKILL.md`, `skills/record-review/SKILL.md` | The three skills as prose steps: the two task boundaries of the Implementer and the Reviewer's review of a head; upload them as account skills. |
 | `docs/adr/0002` to `0011` | Decision history. ADR 0006 records the shrink to this shape; ADR 0007 the review gate; ADR 0008 the thresholds in `auto`; ADR 0009 Grok as a readying and reviewing identity; ADR 0010 the checker called at a tag; ADR 0011 the states of a record and who moves them. |

@@ -1,54 +1,23 @@
 # For a project created from this template, replace the priority, category and
 # assistant options with the project's own scale and label names.
 name: Task
-description: A bounded unit of work that can become Ready under the shared workflow.
+description: A record under the shared workflow. Filed with a title, the problem and its parent, it is in Triage; the other fields are needed before Ready.
 title: "[task] "
 body:
   - type: markdown
     attributes:
       value: |
-        Propose before filing: the title, the problem in one or two sentences, and the open
-        issue this belongs to. Work related to an open issue is filed as its sub-issue, never
-        as a separate issue.
-  - type: dropdown
-    id: priority
+        Anyone may file. Only the title, Problem and Parent task are required here, and the
+        issue is a record in Triage from the moment it is filed. Every other field is required
+        before Ready: fill it now or leave it for grilling. Work related to an open issue is
+        filed as its sub-issue, never as a separate issue.
+  - type: textarea
+    id: problem
     attributes:
-      label: Priority
-      description: Exactly one. Definitions live in this project's instructions. Choose the owner-blocked option when no pull request can close this task.
-      options:
-        - P0
-        - P1
-        - P2
-        - P3
-        - "blocked:owner"
+      label: Problem
+      description: What is wrong or missing, in one or two sentences.
     validations:
       required: true
-  - type: dropdown
-    id: category
-    attributes:
-      label: Category
-      description: Exactly one kind. A tracking record only holds sub-issues and needs no priority.
-      options:
-        - security
-        - bug
-        - ops
-        - feature
-        - chore
-        - tracking
-    validations:
-      required: true
-  - type: dropdown
-    id: assistant
-    attributes:
-      label: Assistant
-      description: Optional. Which assistant may claim this record; "any" or blank means any assistant. The Planner mirrors the choice as an agent:* label.
-      options:
-        - any
-        - claude
-        - codex
-        - gemini
-    validations:
-      required: false
   - type: input
     id: parent
     attributes:
@@ -56,37 +25,85 @@ body:
       description: The open issue this belongs to (it becomes the native sub-issue parent), or "none" with the reason it stands alone.
     validations:
       required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: Exactly one before Ready. Definitions live in this project's instructions. Blocked is not a priority - it is the owner-blocked label beside one.
+      options:
+        - P0
+        - P1
+        - P2
+        - P3
+    validations:
+      required: false
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      description: Exactly one kind before Ready - the type of work. A tracking record only holds sub-issues and needs no priority.
+      options:
+        - security
+        - bug
+        - ops
+        - feature
+        - chore
+        - docs
+        - decision
+        - tracking
+    validations:
+      required: false
+  - type: dropdown
+    id: assistant
+    attributes:
+      label: Assistant
+      description: Optional. Which assistant may implement this record; "any" or blank means any assistant. The Planner mirrors the choice as an agent:* label.
+      options:
+        - any
+        - claude
+        - codex
+        - gemini
+    validations:
+      required: false
   - type: textarea
     id: outcome
     attributes:
       label: Bounded outcome
-      description: The user-visible result or decision this task supports.
+      description: Required before Ready. The user-visible result or decision this task supports.
     validations:
-      required: true
+      required: false
   - type: textarea
     id: acceptance
     attributes:
       label: Acceptance criteria
-      description: Numbered observable behaviours or results, each with the test, inspection or calculation that establishes it.
+      description: Required before Ready. Numbered observable behaviours or results, each with the test, inspection or calculation that establishes it.
     validations:
-      required: true
+      required: false
+  - type: textarea
+    id: success
+    attributes:
+      label: Success criteria (parent only)
+      description: Optional, for a record with sub-issues. What must be true of the whole outcome once every sub-issue has merged, numbered, each with how it will be checked.
+    validations:
+      required: false
   - type: textarea
     id: non_goals
     attributes:
       label: Non-goals and dependencies
+      description: Required before Ready.
     validations:
-      required: true
+      required: false
   - type: textarea
     id: boundaries
     attributes:
       label: Allowed paths, services and actions
-      description: Owned files or components, read-only context, data classification, environment, budget. The budget names the pushes allowed to the open pull request (default 2).
+      description: Required before Ready. Owned files or components, read-only context, data classification, environment, budget. The budget names the pushes allowed to the open pull request (default 2).
     validations:
-      required: true
+      required: false
   - type: textarea
     id: stop
     attributes:
       label: Stop conditions
-      description: When to pause for the owner instead of continuing.
+      description: Required before Ready. When to pause for the owner instead of continuing.
     validations:
-      required: true
+      required: false

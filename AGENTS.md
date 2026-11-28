@@ -73,11 +73,14 @@ covers unless its scope or risk changed.
 
 ## Task records
 
-- Every change starts from a record with exactly one priority (`P0` to `P3`, or
-  `blocked:owner` when no pull request can close it), exactly one category (`kind:*`) and the
-  Ready facts from the issue form: bounded outcome, acceptance criteria with the test or
-  inspection for each, non-goals and dependencies, allowed paths, services and actions, data
-  classification, environment, budget, stop conditions. A plan agreed in chat is not a record.
+- Every change starts from a record: an issue filed with a title and the form's first two
+  headings, Problem and Parent task. Before Ready it carries exactly one priority (`P0` to
+  `P3`, always), exactly one category (`kind:*`) and the Ready facts under the form's other
+  headings: Bounded outcome; Acceptance criteria, with the test or inspection for each;
+  Non-goals and dependencies; Allowed paths, services and actions, with data classification,
+  environment and budget; Stop conditions; and on a parent, Success criteria (parent only),
+  each with how it will be checked. An assistant filing through the API writes the same
+  headings. A plan agreed in chat is not a record.
 - A record has one state (ADR 0011). The state names the work the record waits for and is
   read from GitHub by an ordered rule, first match wins; nobody writes it. Leaf: closed as
   completed is Done; closed as not planned or duplicate is Rejected; an open pull request that
@@ -98,9 +101,14 @@ covers unless its scope or risk changed.
   sub-issue in `auto`, the owner otherwise and on promotion. Done to Rework: the owner reopens
   after a revert, or the Planner in `auto`. Any state to Rejected: the owner. A parent's
   Review: a Reviewer on another runtime when it carries `review:required`, else the Planner.
-- Flags sit beside a state. Blocked is the `blocked:owner` label beside a priority. `kind` is
-  the type of work, and `kind:security` wins a tie. `P2` and `P3` records without
-  `review:required` may merge unread; the weekly backlog review lists those still unreviewed.
+- A record is Rejected by closing it as not planned, or as duplicate, by the owner or by a
+  session on the owner's quoted words, with one sentence giving the reason: obsolete, not
+  feasible, duplicate or superseded.
+- Flags sit beside a state. Blocked is the `blocked:owner` label beside a priority, never in
+  place of one, with a comment saying what is awaited; no pull request closes a record that
+  carries it. `kind` is the type of work, and `kind:security` wins a tie. `P2` and `P3`
+  records without `review:required` may merge unread; the weekly backlog review lists those
+  still unreviewed.
 - Three levels and no more: a top-level record (readied by the owner), its sub-issues (filed
   and readied by the Planner in `auto`, as the gates say), and a tracking parent
   (`kind:tracking`, no priority) when a record only holds sub-issues. Work related to an open
@@ -124,11 +132,12 @@ covers unless its scope or risk changed.
 - A red bot pull request (Dependabot or any other automation) is fixed or closed at the next
   backlog review, never left rebasing.
 - When the last child of a tracking or top-level parent closes, the Planner posts a handoff
-  report as the parent's closing comment: every child with its pull request and merge SHA, the
+  report as the parent's closing comment: every child with its pull request and merge SHA,
+  every Rejected child with its reason, one row per success criterion with its evidence, the
   verification evidence, decisions taken, anything found and left, and the next record to
   open. The report names any push-budget overrun and classifies each child's pull request as
-  accepted (merged and not reverted within 14 days), rejected (closed unmerged or reverted)
-  or pending. In `auto` the Planner then closes the parent; in `manual` the owner does.
+  accepted (merged and not reverted within 14 days), closed unmerged, reverted or pending.
+  In `auto` the Planner then closes the parent; in `manual` the owner does.
 - Decisions go to the record or to `docs/adr/` (an amended ADR carries an "Amended by" line,
   never a rewrite); pitfalls go to this page or the record. The issue and the pull request are
   the checkpoint; private chat does not migrate, and project memory may remind but is not the

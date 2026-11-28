@@ -1,6 +1,6 @@
 ---
 name: task-finish
-description: Finish one task - run the verification contract on the exact head, re-read the record, open one pull request with Closes #n and the ledger, arm squash auto-merge in approval mode auto, fix on a red check or a request for changes; --stopped posts one handoff comment instead of a pull request; writes no other comment, label, assignment or review
+description: Finish one task - run the verification contract on the exact head, re-read the record, open one pull request with Closes #n and the ledger, arm squash auto-merge in approval mode auto, fix on a red check or a request for changes; --stopped posts one handoff comment instead of a pull request; --report is the Planner's closing report on a parent whose last child closed; writes no other comment, label, assignment or review
 ---
 
 # Task finish
@@ -49,9 +49,34 @@ report: this skill posts no milestone, claim or release comment.
    <one sentence a fresh session can execute>.
    ```
 
+8. The closing report (`task-finish --report`) is the Planner's, never the Implementer's:
+   when the last child of a tracking or top-level parent closes, one comment on the parent,
+   every fact read from GitHub. A pull request is accepted (merged and not reverted within
+   14 days), closed unmerged, reverted or pending; only a record is Rejected. In approval
+   mode `auto` the Planner then closes the parent as completed; in `manual` the owner does.
+
+   ```
+   **Closing report.** Planner on <runtime>, <reference>, <UTC time>.
+
+   | Child | Pull request | Merge SHA | Pull request is |
+   | --- | --- | --- | --- |
+   | #n <title> | #m | <SHA> | accepted, closed unmerged, reverted or pending |
+
+   Rejected children: <#n, closed as not planned or duplicate: the reason | none>.
+
+   | Success criterion | Evidence | Result |
+   | --- | --- | --- |
+   | 1. <from the parent's "Success criteria (parent only)", or its acceptance criteria> | <test, inspection or link> | met or not met |
+
+   Verification evidence: <rows and tested SHAs>. Decisions: <one line each | none>.
+   Push-budget overruns: <child and count | none>. Found and left: <one line each | none>.
+   Next record to open: <#n or a one-line proposal | none>.
+   ```
+
 Refuse, whoever asks: merging by hand; reviewing or approving your own pull request;
-applying or removing a label, assigning, closing or reopening any issue; a second pull
-request for the task. The record's state moves by what GitHub holds, never by this skill.
+applying or removing a label, assigning, closing or reopening any issue (the Planner's
+close of a parent after its closing report apart); a second pull request for the task. The
+record's state moves by what GitHub holds, never by this skill.
 
 Stop and ask the owner when the pull request would close a task other than the one you
 started, or when a verification row needs a tool the session cannot install.
