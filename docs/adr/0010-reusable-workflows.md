@@ -12,6 +12,11 @@
   `v1`, follows slice 4 of #124, #128, and no tag is created before it);
   ADR 0012 (the caller names a tag or a SHA, never a branch; a release candidate tag is
   tested on an adopter before `v1` moves; each release also gets an exact tag)
+- Amended by: #168, under the owner's decision 1 on #167 (2026-11-28): finding (a)'s last
+  sentence and recommendation 6 no longer hold. This repository calls `pr-policy.yml` through
+  its own caller, `linked-task.yml`, at the pull request's own commit, and reports
+  `linked-task / linked-task` like an adopter; `pr-policy.yml` has no direct trigger. `ci.yml`
+  is still triggered directly and `verify` keeps its name
 - Roles: spike run and this record written by the Implementer (a project thread)
 
 ## Context

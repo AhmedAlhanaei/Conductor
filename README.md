@@ -115,8 +115,8 @@ is the Reviewer's: one native review of a pull request's head against its record
    with or without the label (ADR 0011). Conductor itself sets `P2` and `kind:security`.
 4. In GitHub, repository Settings, Branches: protect the default branch with a required
    pull request, "Do not allow bypassing" on, approvals off, required checks `verify` and
-   `linked-task / linked-task` (the name the caller in step 2 reports under; only Conductor
-   itself, which runs the workflow directly, requires the bare `linked-task`). In Settings,
+   `linked-task / linked-task` (the name the caller in step 2 reports under; Conductor
+   itself reports the same name, through its own caller `linked-task.yml`). In Settings,
    General, Pull Requests: tick **Allow auto-merge** for `auto`.
 5. Create the labels the policy uses: priorities `P0` to `P3`, `blocked:owner`, categories
    `kind:*`, `kind:tracking`, `status:ready`, and optionally `agent:claude`, `agent:codex`,
@@ -273,6 +273,7 @@ and anything that would need a generator, a runtime or a second copy of the rule
 | `README.md` | This page. |
 | `.gitignore` | Keeps local secrets (`.env`) and editor, OS and Python cache files out of the repository. |
 | `.github/workflows/pr-policy.yml` | The `linked-task` check: a pull request closes exactly one open task that carries one priority, one category and `status:ready`, and is neither owner-blocked nor tracking; in approval mode `auto` the task's parent is ready too; a `review:required` task holds the merge until the body records a review of the head; in `auto` a task above the assistant priority cap or in an owner-only category must have been readied by the owner; the head commit must belong to this pull request alone (one branch, one head, one pull request). |
+| `.github/workflows/linked-task.yml` | Conductor's own caller of `pr-policy.yml`, at the pull request's own commit, so its pull requests report `linked-task / linked-task` like an adopter's. Not copied: an adopter writes the caller of step 2 instead. |
 | `.github/workflows/ci.yml` | The `verify` check: `git diff --check`, `actionlint` and the checker tests. A project with code replaces the steps with its own verification contract. |
 | `tests/test_pr_policy.py` | Standard-library regression tests that run the checker embedded in `pr-policy.yml` against faked `gh` answers; no network. |
 | `.github/workflows/backlog-review.yml` | Optional weekly read-only backlog report. |

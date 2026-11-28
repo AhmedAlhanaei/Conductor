@@ -21,6 +21,7 @@ from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "pr-policy.yml"
+SELF_CALLER = ROOT / ".github" / "workflows" / "linked-task.yml"  # Conductor's own caller (#168)
 
 HEAD = "a" * 40
 STALE = "b" * 40
@@ -815,8 +816,9 @@ class WorkflowTriggerTests(unittest.TestCase):
     TRIGGER = re.compile(r"^(\s*)pull_request_review:\n\1  types: \[submitted, dismissed, edited\]$", re.M)
 
     def test_the_workflow_runs_on_a_submitted_review(self):
+        # The checker has no trigger of its own (#168): this repository's caller carries it.
+        self.assertRegex(SELF_CALLER.read_text(encoding="utf-8"), self.TRIGGER)
         text = WORKFLOW.read_text(encoding="utf-8")
-        self.assertRegex(text, self.TRIGGER)
         self.assertIn("PR_AUTHOR: ${{ github.event.pull_request.user.login }}", text)
 
     def test_the_readme_caller_runs_on_a_submitted_review(self):
@@ -829,6 +831,51 @@ class WorkflowTriggerTests(unittest.TestCase):
         self.assertNotRegex(template, r"(?m)^##\s+Review\b")
         self.assertNotIn("reviewed SHA", template)
         self.assertRegex(template, r"(?m)^- Implementer runtime:")
+
+
+class SelfCallerTests(unittest.TestCase):
+    """#168: Conductor calls its own checker, so its pull requests report
+    `linked-task / linked-task` like an adopter's and never a bare `linked-task`."""
+
+    @staticmethod
+    def _code(path):
+        """The workflow without its comment lines."""
+        return "".join(line for line in path.read_text(encoding="utf-8").splitlines(keepends=True)
+                       if not line.lstrip().startswith("#"))
+
+    def test_the_checker_is_only_called(self):
+        # A direct trigger would report a second, bare `linked-task` beside the caller's.
+        self.assertRegex(self._code(WORKFLOW), r"(?m)^on:\n  workflow_call:\n(?=\S)")
+
+    def test_the_call_interface_is_empty(self):
+        # An adopter's caller written for `v1` passes nothing; an input or a secret here
+        # would be a `v2` change (ADR 0012).
+        code = self._code(WORKFLOW)
+        self.assertNotRegex(code, r"(?m)^\s+(inputs|secrets|outputs):")
+        self.assertRegex(code, r"(?m)^jobs:\n  linked-task:\n")
+
+    def test_the_self_caller_calls_the_local_checker(self):
+        code = self._code(SELF_CALLER)
+        self.assertRegex(code, r"(?m)^jobs:\n  linked-task:\n    uses: \./\.github/workflows/pr-policy\.yml\n\Z")
+        self.assertRegex(code, r"(?m)^on:\n  pull_request:\n    types: \[opened, edited, synchronize, reopened\]\n"
+                               r"  pull_request_review:\n    types: \[submitted, dismissed, edited\]\n(?=\S)")
+        self.assertRegex(code, r"(?m)^permissions:\n  actions: write\n  contents: read\n  issues: read\n  pull-requests: read\njobs:")
+
+    def test_the_self_caller_matches_the_readme_caller_but_for_the_ref(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        block = readme[readme.index("name: PR policy"):]
+        block = block[:block.index("```")]
+        adopter = "".join(line[3:] + "\n" for line in block.splitlines())
+        mine = self._code(SELF_CALLER)
+        self.assertEqual(adopter[adopter.index("on:"):adopter.index("uses:")], mine[mine.index("on:"):mine.index("uses:")])
+
+    def test_the_rerun_reads_the_workflow_from_the_run_id(self):
+        # Called, GITHUB_RUN_ID is the caller's run, so "this workflow" is the caller's and
+        # the review-event run re-runs the caller's `pull_request` run (#142).
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("""api(f"repos/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}")["workflow_id"]""", text)
+        self.assertNotIn("actions/workflows/pr-policy.yml", text)
+        self.assertNotIn("GITHUB_WORKFLOW_REF", text)
 
 
 class SharedHeadTests(PolicyTest):
