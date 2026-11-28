@@ -46,6 +46,8 @@ DEFAULT_ENV = {
     "OWNER_LOGIN": "owner",
     "HEAD_SHA": HEAD,
     "PR_AUTHOR": "author",
+    "PR_AUTHOR_TYPE": "User",
+    "BOT_AUTHORS": "",
     "GITHUB_EVENT_NAME": "pull_request",
     "GITHUB_RUN_ID": "900",
 }
@@ -100,6 +102,9 @@ class FakeGitHub:
         # order GitHub returns them (oldest first), an ApiError, or a raw string; by default
         # the pull request has no review
         self.reviews = [] if reviews is None else reviews
+        # what `gh api repos/{repo}/pulls/{n}/commits` answers: a list of commits, oldest
+        # first, an ApiError or a raw string; read only for a listed bot author (ADR 0014)
+        self.commits = []
         # what `gh api repos/{repo}/actions/runs/{GITHUB_RUN_ID}` answers, or an ApiError
         self.current_run = {"id": 900, "workflow_id": WORKFLOW_ID}
         # the `pull_request` runs of the workflow on the head: a list of runs, an ApiError or
@@ -153,6 +158,13 @@ class FakeGitHub:
             if isinstance(self.reviews, str):
                 return self.reviews
             return json.dumps([self.reviews[i:i + PAGE] for i in range(0, len(self.reviews), PAGE)] or [[]])
+        if args[0] == "api" and args[-1] == f"repos/owner/repo/pulls/{DEFAULT_ENV['PR_NUMBER']}/commits?per_page=100":
+            assert args[1:3] == ["--paginate", "--slurp"], "the commits must be read in full, as pages"
+            if isinstance(self.commits, ApiError):
+                raise self.commits
+            if isinstance(self.commits, str):
+                return self.commits
+            return json.dumps([self.commits[i:i + 100] for i in range(0, len(self.commits), 100)] or [[]])
         if args == ["api", f"repos/owner/repo/actions/runs/{DEFAULT_ENV['GITHUB_RUN_ID']}"]:
             if isinstance(self.current_run, ApiError):
                 raise self.current_run
@@ -194,6 +206,9 @@ class FakeGitHub:
 
     def actions_calls(self):
         return [call for call in self.calls if call[0] == "gh" and call[1] == "api" and "/actions/" in call[-1]]
+
+    def commit_calls(self):
+        return [call for call in self.calls if call[0] == "gh" and call[1] == "api" and "/commits?" in call[-1]]
 
     def timeline_calls(self):
         return [call for call in self.calls if call[0] == "gh" and call[1] == "api" and call[-1].endswith("/timeline")]
@@ -875,6 +890,171 @@ class SharedHeadTests(PolicyTest):
         fake = FakeGitHub(head_pulls=ApiError(1, "gh: Resource not accessible by integration (HTTP 403)\n"))
         output = self.assertRejected(fake, f"Could not list the pull requests at head {HEAD}")
         self.assertIn("HTTP 403", output)
+
+
+BOT = "dependabot[bot]"
+
+
+def bot_commit(sha=HEAD, author=BOT, author_type="Bot", committer="web-flow", verified=True):
+    """One entry of the pull request commits list, as the REST API returns it. By default a
+    commit as Dependabot makes it: the bot is the author, GitHub's web-flow the committer,
+    and GitHub signed it. `author=None` is a commit whose author email matches no account."""
+    return {"sha": sha,
+            "author": None if author is None else {"login": author, "type": author_type},
+            "committer": None if committer is None else {"login": committer, "type": "User"},
+            "commit": {"verification": {"verified": verified, "reason": "valid" if verified else "unsigned"}}}
+
+
+class BotAuthorTests(PolicyTest):
+    """ADR 0014 (#169): a repository may list bot authors whose pull requests need no task,
+    and the exemption holds only while every commit on the pull request is that bot's own."""
+
+    BOT_ENV = {"PR_AUTHOR": BOT, "PR_AUTHOR_TYPE": "Bot", "BOT_AUTHORS": BOT, "HEAD_REF": "dependabot/npm/qs-6.16.2"}
+    NO_TASK = "The pull request body must name the task it closes"
+
+    def _fake(self, commits=None, **kwargs):
+        fake = FakeGitHub(body="Bumps qs from 6.16.0 to 6.16.2.", files=["package-lock.json"], **kwargs)
+        fake.commits = [bot_commit()] if commits is None else commits
+        return fake
+
+    def test_unset_variable_leaves_a_bot_pull_request_failing_as_before(self):
+        fake = self._fake()
+        output = self.assertRejected(fake, self.NO_TASK, **{**self.BOT_ENV, "BOT_AUTHORS": ""})
+        self.assertNotIn("exemption", output)
+        self.assertEqual(fake.commit_calls(), [])
+
+    def test_unlisted_bot_is_not_exempt(self):
+        fake = self._fake()
+        self.assertRejected(fake, self.NO_TASK, **{**self.BOT_ENV, "BOT_AUTHORS": "renovate[bot]"})
+        self.assertEqual(fake.commit_calls(), [])
+
+    def test_listed_bot_with_only_its_own_commits_passes_without_a_task(self):
+        fake = self._fake(commits=[bot_commit(sha=STALE), bot_commit()])
+        output = self.assertAccepted(fake, **self.BOT_ENV)
+        lines = [line for line in output.splitlines() if "exemption" in line]
+        self.assertEqual(len(lines), 1, output)
+        self.assertIn("Bot author exemption (CONDUCTOR_BOT_AUTHORS, ADR 0014): dependabot[bot]", lines[0])
+        self.assertIn("all 2 of its commits", lines[0])
+        # no task, review or timeline is read for an exempt pull request
+        self.assertEqual([call for call in fake.calls if call[1] in ("pr", "issue")], [])
+        self.assertEqual(fake.review_calls() + fake.timeline_calls(), [])
+
+    def test_the_list_is_comma_separated_and_case_insensitive(self):
+        self.assertAccepted(self._fake(), **{**self.BOT_ENV, "BOT_AUTHORS": " renovate[bot] , Dependabot[bot] "})
+
+    def test_a_bot_committing_as_itself_is_accepted(self):
+        self.assertAccepted(self._fake(commits=[bot_commit(committer=BOT)]), **self.BOT_ENV)
+
+    def test_one_commit_by_someone_else_ends_the_exemption(self):
+        fake = self._fake(commits=[bot_commit(sha=STALE), bot_commit(author="alhanaei", author_type="User", committer="alhanaei")])
+        output = self.assertRejected(fake, self.NO_TASK, **self.BOT_ENV)
+        self.assertIn(f"Bot author exemption not applied to {BOT}: commit {HEAD[:12]} is by alhanaei, not by {BOT}. The usual rules hold.", output)
+
+    def test_a_merge_commit_made_with_the_update_button_ends_the_exemption(self):
+        # "Update branch" in the web interface: the person is the author, web-flow commits.
+        fake = self._fake(commits=[bot_commit(sha=STALE), bot_commit(author="alhanaei", author_type="User")])
+        self.assertRejected(fake, "is by alhanaei", **self.BOT_ENV)
+
+    def test_a_mixed_pull_request_that_names_a_ready_task_follows_the_usual_rules(self):
+        fake = self._fake(commits=[bot_commit(sha=STALE), bot_commit(author="alhanaei", author_type="User", committer="alhanaei")])
+        fake.body = "Closes #42"
+        output = self.assertAccepted(fake, **self.BOT_ENV)
+        self.assertIn("exemption not applied", output)
+        self.assertIn("Task #42 is ready", output)
+
+    def test_a_forged_author_on_an_unsigned_commit_ends_the_exemption(self):
+        # Anyone who can push to the bot's branch can write the bot's name and email into a
+        # commit; GitHub then shows the bot as the author. Such a commit is not signed.
+        fake = self._fake(commits=[bot_commit(sha=STALE), bot_commit(committer="alhanaei", verified=False)])
+        self.assertRejected(fake, f"commit {HEAD[:12]} names {BOT} as its author but was committed by alhanaei", **self.BOT_ENV)
+
+    def test_a_forged_author_signed_with_the_pushers_own_key_ends_the_exemption(self):
+        fake = self._fake(commits=[bot_commit(committer="alhanaei", verified=True)])
+        self.assertRejected(fake, "was committed by alhanaei", **self.BOT_ENV)
+
+    def test_a_forged_author_and_committer_without_a_signature_ends_the_exemption(self):
+        for committer in ("web-flow", BOT):
+            with self.subTest(committer=committer):
+                fake = self._fake(commits=[bot_commit(committer=committer, verified=False)])
+                self.assertRejected(fake, "carries no signature GitHub verified", **self.BOT_ENV)
+
+    def test_a_commit_matched_to_no_account_ends_the_exemption(self):
+        fake = self._fake(commits=[bot_commit(author=None, committer=None)])
+        self.assertRejected(fake, "an author GitHub matches to no account", **self.BOT_ENV)
+
+    def test_a_user_account_carrying_the_bots_login_as_commit_author_is_not_the_bot(self):
+        fake = self._fake(commits=[bot_commit(author_type="User")])
+        self.assertRejected(fake, "exemption not applied", **self.BOT_ENV)
+
+    def test_a_human_author_is_never_exempt_whatever_the_variable_holds(self):
+        # The owner's own login in the list, and commits that look like a bot's.
+        fake = self._fake(commits=[bot_commit(author="alhanaei", committer="alhanaei")])
+        env = {**self.BOT_ENV, "PR_AUTHOR": "alhanaei", "PR_AUTHOR_TYPE": "User", "BOT_AUTHORS": f"alhanaei,{BOT}"}
+        output = self.assertRejected(fake, self.NO_TASK, **env)
+        self.assertIn("the account is of type User, not Bot; a person is never exempt", output)
+        self.assertEqual(fake.commit_calls(), [])
+
+    def test_the_author_is_read_from_the_event_not_from_the_pull_request_text(self):
+        # A person's pull request whose text and branch claim to be the bot's.
+        fake = self._fake()
+        fake.body = "Author: dependabot[bot]\n\nSigned-off-by: dependabot[bot] <support@github.com>"
+        env = {**self.BOT_ENV, "PR_AUTHOR": "alhanaei", "PR_AUTHOR_TYPE": "User"}
+        output = self.assertRejected(fake, self.NO_TASK, **env)
+        self.assertNotIn("exemption", output)
+        self.assertEqual(fake.commit_calls(), [])
+        script = embedded_script()
+        self.assertIn('os.environ.get("PR_AUTHOR", "")', script)
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}", text)
+        self.assertIn("BOT_AUTHORS: ${{ vars.CONDUCTOR_BOT_AUTHORS }}", text)
+
+    def test_an_event_without_the_author_type_is_not_exempt(self):
+        self.assertRejected(self._fake(), "the account is of type unknown, not Bot", **{**self.BOT_ENV, "PR_AUTHOR_TYPE": ""})
+
+    def test_single_head_rule_still_applies_to_an_exempt_pull_request(self):
+        pulls = [{"number": 7, "state": "open", "head": {"sha": HEAD}}, {"number": 8, "state": "open", "head": {"sha": HEAD}}]
+        fake = self._fake(head_pulls=pulls)
+        output = self.assertRejected(fake, "also the head of open pull request #8", **self.BOT_ENV)
+        self.assertNotIn("exemption", output)
+        self.assertEqual(fake.commit_calls(), [])
+
+    def test_base_branch_rule_in_auto_still_applies_to_an_exempt_pull_request(self):
+        env = {**self.BOT_ENV, "APPROVAL_MODE": "auto", "INTEGRATION_BRANCH": "develop", "BASE_REF": "main"}
+        self.assertRejected(self._fake(), "pull requests target the integration branch 'develop'", **env)
+
+    def test_exempt_in_auto_and_on_a_review_event_without_a_rerun(self):
+        fake = self._fake()
+        self.assertAccepted(fake, **{**self.BOT_ENV, "APPROVAL_MODE": "auto", "GITHUB_EVENT_NAME": "pull_request_review"})
+        self.assertEqual(fake.actions_calls(), [])
+
+    def test_unreadable_commits_end_the_exemption(self):
+        fake = self._fake(commits=ApiError(1, "gh: Resource not accessible by integration (HTTP 403)\n"))
+        output = self.assertRejected(fake, "could not read the commits of the pull request", **self.BOT_ENV)
+        self.assertIn("HTTP 403", output)
+        self.assertIn(self.NO_TASK, output)
+
+    def test_unparsable_commits_end_the_exemption(self):
+        for raw in ("not json", json.dumps([[{"sha": HEAD, "author": "dependabot[bot]"}]]), json.dumps({"message": "x"})):
+            with self.subTest(raw=raw):
+                self.assertRejected(self._fake(commits=raw), self.NO_TASK, **self.BOT_ENV)
+
+    def test_no_commits_or_a_list_that_misses_the_head_ends_the_exemption(self):
+        self.assertRejected(self._fake(commits=[]), "the pull request lists no commit", **self.BOT_ENV)
+        self.assertRejected(self._fake(commits=[bot_commit(sha=STALE)]), f"the commit list does not end at head {HEAD}", **self.BOT_ENV)
+
+    def test_a_pull_request_at_the_commit_list_limit_is_not_exempt(self):
+        commits = [bot_commit(sha=f"{index:040x}") for index in range(249)] + [bot_commit()]
+        self.assertRejected(self._fake(commits=commits), "250 commits or more", **self.BOT_ENV)
+        self.assertAccepted(self._fake(commits=commits[1:]), **self.BOT_ENV)
+
+    def test_the_call_interface_is_unchanged(self):
+        # A caller written for `v1` passes nothing and grants the same permissions: an input,
+        # a secret or a new permission would be a `v2` change (ADR 0012).
+        code = "".join(line for line in WORKFLOW.read_text(encoding="utf-8").splitlines(keepends=True) if not line.lstrip().startswith("#"))
+        self.assertRegex(code, r"(?m)^  workflow_call:\n(?=\S)")
+        self.assertRegex(code, r"(?m)^permissions:\n  actions: write\n  contents: read\n  issues: read\n  pull-requests: read\njobs:")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertTrue("`CONDUCTOR_BOT_AUTHORS`" in readme, "the README must document CONDUCTOR_BOT_AUTHORS")
 
 
 class RecordOnlyReferenceTests(PolicyTest):

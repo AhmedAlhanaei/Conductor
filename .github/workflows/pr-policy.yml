@@ -86,6 +86,26 @@
 #                               read and the check behaves as before ADR 0008; in manual it
 #                               is read for every readied task. A failed lookup, or a
 #                               timeline with no such event, fails the check
+#   CONDUCTOR_BOT_AUTHORS       comma-separated logins of bot accounts, default unset (no
+#                               exemption, the check behaves as before ADR 0014). A pull
+#                               request opened by a listed bot needs no task: after the
+#                               base-branch and single-head rules, which still apply, the
+#                               check passes with one line naming the exemption. It applies
+#                               only when the pull request's author, read from the event and
+#                               never from its text, is an account of type "Bot" (so a
+#                               person's login in the list exempts nothing), and every
+#                               commit on the pull request, read from the API with the
+#                               permissions a caller already grants, has that bot as its
+#                               author, that bot or GitHub's own "web-flow" as its
+#                               committer, and a signature GitHub verified. An author field
+#                               alone can be forged by anyone who can push to the bot's
+#                               branch; the verified signature of the bot's own commit
+#                               cannot, so a commit a person pushes or merges in, and an
+#                               unsigned commit of the bot itself, end the exemption and the
+#                               usual rules hold. Commits that cannot be read, more than 249
+#                               of them, or a list that does not end at the head do the
+#                               same. The exemption covers this check only: `verify` still
+#                               runs, and nothing here merges the pull request
 name: PR policy
 on:
   pull_request:
@@ -124,6 +144,8 @@ jobs:
       OWNER_LOGIN: ${{ vars.CONDUCTOR_OWNER_LOGIN || github.repository_owner }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+      PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+      BOT_AUTHORS: ${{ vars.CONDUCTOR_BOT_AUTHORS }}
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       BASE_REF: ${{ github.event.pull_request.base.ref }}
       HEAD_REF: ${{ github.event.pull_request.head.ref }}
@@ -170,6 +192,54 @@ jobs:
               print(f"::error::Head {head_sha} is also the head of open pull request {', '.join('#' + str(n) for n in others)}; one branch, one head, one pull request: close the other pull request or push a distinct commit, since a green check on a shared commit would let either pull request merge.")
               sys.exit(1)
           print(f"Head {head_sha} belongs to this pull request alone.")
+
+          def bot_exemption_problem(author):
+              # ADR 0014. Why the pull request of a listed bot author is not exempt from the
+              # task requirement, or None when it is. The author and its account type come
+              # from the event, never from the pull request's text. A commit's author field
+              # is whatever the person who made the commit wrote, so it is not enough: each
+              # commit must also carry a signature GitHub verified and have the bot, or
+              # GitHub's own web-flow, as its committer, which a person pushing to the bot's
+              # branch cannot produce. Anything unreadable or unexpected ends the exemption;
+              # it never passes by default.
+              kind = os.environ.get("PR_AUTHOR_TYPE", "").strip()
+              if kind != "Bot":
+                  return f"the account is of type {kind or 'unknown'}, not Bot; a person is never exempt"
+              run = subprocess.run(["gh", "api", "--paginate", "--slurp", f"repos/{repo}/pulls/{pr_number}/commits?per_page=100"], capture_output=True, text=True)
+              if run.returncode:
+                  detail = run.stderr.strip() or run.stdout.strip() or "no output"
+                  return f"could not read the commits of the pull request (gh api exit {run.returncode}): {detail}"
+              try:
+                  commits = [commit for page in json.loads(run.stdout) for commit in page]
+                  if not commits:
+                      return "the pull request lists no commit"
+                  if len(commits) >= 250:
+                      return "the pull request has 250 commits or more and the API lists no more than that, so not every commit can be read"
+                  if (commits[-1].get("sha") or "").lower() != head_sha:
+                      return f"the commit list does not end at head {head_sha}"
+                  for commit in commits:
+                      short = (commit.get("sha") or "unknown")[:12]
+                      by, committer = commit.get("author") or {}, commit.get("committer") or {}
+                      login = (by.get("login") or "").strip()
+                      if login.lower() != author.lower() or (by.get("type") or "") != "Bot":
+                          return f"commit {short} is by {login or 'an author GitHub matches to no account'}, not by {author}"
+                      committed_by = (committer.get("login") or "").strip()
+                      if committed_by.lower() not in (author.lower(), "web-flow"):
+                          return f"commit {short} names {author} as its author but was committed by {committed_by or 'an unknown committer'}"
+                      if ((commit.get("commit") or {}).get("verification") or {}).get("verified") is not True:
+                          return f"commit {short} names {author} as its author but carries no signature GitHub verified, so it cannot be told from a commit someone else pushed"
+              except (ValueError, TypeError, AttributeError) as error:
+                  return f"could not parse the commits of the pull request ({type(error).__name__}: {error})"
+              print(f"Bot author exemption (CONDUCTOR_BOT_AUTHORS, ADR 0014): {author} opened this pull request and all {len(commits)} of its commits are its own, signed and verified; no task is required. `verify` still applies and the merge is the owner's.")
+              return None
+
+          bot_authors = {login.strip().lower() for login in os.environ.get("BOT_AUTHORS", "").split(",") if login.strip()}
+          pr_author = os.environ.get("PR_AUTHOR", "").strip()
+          if pr_author and pr_author.lower() in bot_authors:
+              problem = bot_exemption_problem(pr_author)
+              if problem is None:
+                  sys.exit(0)
+              print(f"Bot author exemption not applied to {pr_author}: {problem}. The usual rules hold.")
           body = json.loads(gh("pr", "view", os.environ["PR_NUMBER"], "--repo", repo, "--json", "body"))["body"] or ""
 
           def unquoted(text):

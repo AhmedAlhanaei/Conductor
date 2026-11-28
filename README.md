@@ -113,6 +113,11 @@ is the Reviewer's: one native review of a pull request's head against its record
    (ADR 0008). In both modes the same two variables decide when a review is required: such a
    task holds the merge until its head has a GitHub review that does not request changes,
    with or without the label (ADR 0011). Conductor itself sets `P2` and `kind:security`.
+   `CONDUCTOR_BOT_AUTHORS` (default unset: no exemption) lists the logins of bots, comma
+   separated, for example `dependabot[bot]`, whose pull requests pass `linked-task` without a
+   task while every commit on them is the bot's own, signed and verified by GitHub; one
+   commit by anyone else and the usual rules hold. `verify` still runs, and the merge is the
+   owner's click in every mode ([ADR 0014](docs/adr/0014-bot-author-exemption.md)).
 4. In GitHub, repository Settings, Branches: protect the default branch with a required
    pull request, "Do not allow bypassing" on, approvals off, required checks `verify` and
    `linked-task / linked-task` (the name the caller in step 2 reports under; only Conductor
@@ -199,7 +204,11 @@ owner's, in the browser.
 
    That is at most two open version-update pull requests per ecosystem, minor and patch
    updates in one of them, and the security updates of an ecosystem in one more. A bot pull
-   request names no task, so `linked-task` holds it until the owner gives it one; a red one
+   request names no task, so `linked-task` holds it until the owner gives it one, unless the
+   repository lists the bot in `CONDUCTOR_BOT_AUTHORS` (step 3 of [Try it](#try-it)): then it
+   needs no task, `verify` decides whether it is green, and the owner merges it by hand. To
+   bring such a pull request up to date, ask the bot (`@dependabot rebase`): the "Update
+   branch" button adds a commit of your own and ends the exemption. A red one
    is fixed or closed at the next backlog review, never left rebasing
    ([Task records](AGENTS.md#task-records)).
 6. **Connect the assistants**: paste `AGENTS.md` into the project instructions where the
@@ -249,6 +258,8 @@ that breaks the rule; the record, the pull request and the review are where it s
 | The verification ledger and the evidence table in the pull request body | Trust only (the template asks for them) |
 | The cost defaults of `ci.yml` (trigger, concurrency, timeout, runner) | Trust only (they are in the copied file; nothing checks they stay) |
 | A red bot pull request is fixed or closed at the next backlog review | Trust only |
+| A pull request of a bot listed in `CONDUCTOR_BOT_AUTHORS` needs no task while every commit on it is the bot's own | `linked-task`, when the variable is set: the author must be an account of type Bot, and every commit must have it as author, it or GitHub's `web-flow` as committer, and a signature GitHub verified, so a forged author field does not pass. The single-head and base-branch rules still apply |
+| The merge of an exempt bot pull request is the owner's click in every mode | Trust only. Nothing in GitHub stops a session from arming auto-merge on it |
 | No force-push or rewritten history on a task branch | Trust only |
 | No deploy, spend, credential or access change, non-public data, publishing outside GitHub, account rotation or credentials in files | Trust only |
 | Nothing starts on a Parked or Closed project, or on a record that is not Ready | Trust only at the start; `linked-task` stops the pull request of a record that is not Ready |
@@ -279,6 +290,6 @@ and anything that would need a generator, a runtime or a second copy of the rule
 | `.github/ISSUE_TEMPLATE/task.yml` | The task form: title, Problem and Parent task required at filing, the Ready facts before Ready, and "Success criteria (parent only)". |
 | `.github/pull_request_template.md` | `Closes #n`, the verification ledger, merge danger, review line, "Found and left". |
 | `skills/task-start/SKILL.md`, `skills/task-finish/SKILL.md`, `skills/record-review/SKILL.md` | The three skills as prose steps: the two task boundaries of the Implementer and the Reviewer's review of a head; upload them as account skills. |
-| `docs/adr/0002` to `0013` | Decision history. ADR 0006 records the shrink to this shape; ADR 0007 the review gate; ADR 0008 the thresholds in `auto`; ADR 0009 Grok as a readying and reviewing identity; ADR 0010 the checker called at a tag; ADR 0011 the states of a record and who moves them; ADR 0012 the release step, a candidate tag tested on an adopter before `v1` moves; ADR 0013 the auto-start check, accepted and not yet switched on. |
+| `docs/adr/0002` to `0014` | Decision history. ADR 0006 records the shrink to this shape; ADR 0007 the review gate; ADR 0008 the thresholds in `auto`; ADR 0009 Grok as a readying and reviewing identity; ADR 0010 the checker called at a tag; ADR 0011 the states of a record and who moves them; ADR 0012 the release step, a candidate tag tested on an adopter before `v1` moves; ADR 0013 the auto-start check, accepted and not yet switched on; ADR 0014 the opt-in list of bot authors whose pull requests need no task. |
 | `docs/auto-start-check.md` | The instruction text of the one scheduled check that is not read-only: it has the Planner start the thread of a Ready record that is free to start. The prompt of a claude.ai scheduled task, not a workflow; a change to it is a pull request. |
 | `docs/lifecycle.md` | Reference for the states of a record; the page governs. |

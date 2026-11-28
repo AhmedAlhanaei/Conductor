@@ -130,7 +130,9 @@ covers unless its scope or risk changed.
 - Anything found mid-task is proposed and left: a comment on the record it belongs to, or a
   line on the Backlog issue with a suggested priority. Scope changes only on the owner's word.
 - A red bot pull request (Dependabot or any other automation) is fixed or closed at the next
-  backlog review, never left rebasing.
+  backlog review, never left rebasing. Where a repository lists a bot in
+  `CONDUCTOR_BOT_AUTHORS`, that bot's pull request needs no record (ADR 0014); no session
+  arms auto-merge on it or merges it: its merge is the owner's click in every mode.
 - When the last child of a tracking or top-level parent closes, the Planner posts a handoff
   report as the parent's closing comment: every child with its pull request and merge SHA,
   every Rejected child with its reason, one row per success criterion with its evidence, the
