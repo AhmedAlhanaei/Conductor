@@ -46,13 +46,21 @@ owner and name in place of `<owner>/<name>`:
 repo:<owner>/<name> is:issue is:open label:status:ready no:assignee -label:blocked:owner -is:blocked
 ```
 
-From a session: `gh api -X GET search/issues -f q='<the query>' --paginate`. The search
-answers four things: the record is open and Ready, has no assignee, does not carry
+From a session: `gh api -X GET search/issues -f advanced_search=true -f q='<the query>'
+--paginate`. Without `advanced_search=true` the search ignores `-is:blocked` without an
+error and returns blocked records (shown on #163, 2026-11-28). The search answers four
+things: the record is open and Ready, has no assignee, does not carry
 `blocked:owner`, and has no open issue blocking it under GitHub's native "Blocked by"
 relationship. A dependency written only in a body or a comment is not read and holds
 nothing back.
 
-If no repository returns a hit, end the run and post nothing.
+In a `report-only` repository also run, the same way, the wider search
+`repo:<owner>/<name> is:issue is:open label:status:ready`. A record in the wider result that
+the first search did not return is held back by the first of these that holds: it has an
+assignee, "assigned"; it carries `blocked:owner`, "`blocked:owner`"; otherwise "blocked by
+an open issue".
+
+If no search returns a hit, end the run and post nothing.
 
 ### 3. Read each hit
 
@@ -80,7 +88,8 @@ back, "could not be read", and the report says so.
 4. With one at work, the first record in the order whose allowed paths share nothing with
    the running thread's record is the candidate; a record that shares paths is "waits,
    shares paths with #n". With none at work, the first record in the order is the candidate.
-5. A run has at most one candidate. Never start a third thread.
+5. A run has at most one candidate. Never start a third thread. A free record that is not
+   the candidate is "waits, behind #n", n being the candidate.
 
 ### 5. Start or propose
 
@@ -123,7 +132,7 @@ Stop the run, start nothing more, and tell the owner when:
 - a third thread would be started;
 - the run would need a write beyond the assignment;
 - a covered repository that is not `off` lacks the `status:ready` label, or the search
-  rejects `-is:blocked` there;
+  rejects or ignores `-is:blocked` there;
 - the scheduled task cannot be paused, or fired somewhere other than the coordinator;
 - any step would cost GitHub Actions minutes or need a credential.
 
