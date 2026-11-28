@@ -271,6 +271,16 @@ class ClosingTaskTests(PolicyTest):
     def test_unterminated_fence_quotes_to_the_end_of_the_body(self):
         self.assertAccepted(FakeGitHub(body="Closes #42\n\n```\nCloses #43\n"))
 
+    def test_longer_closing_fence_ends_the_block(self):
+        # #155: CommonMark closes a fence on a run at least as long as the opener. The exact
+        # backreference used to miss it and quote the rest of the body, dropping "Closes #42".
+        self.assertAccepted(FakeGitHub(body="```\nCloses #43\n````\n\nCloses #42\n"))
+        self.assertAccepted(FakeGitHub(body="~~~\nfixes #43\n~~~~~\nCloses #42\n"))
+
+    def test_shorter_or_other_character_fence_does_not_close_the_block(self):
+        # Inside a four-backtick block, a three-backtick line or a tilde line is content.
+        self.assertAccepted(FakeGitHub(body="Closes #42\n\n````\n```\nCloses #43\n~~~~\nfixes #44\n````\n"))
+
     def test_double_backtick_span_holding_a_backtick_is_quoted_text(self):
         self.assertAccepted(FakeGitHub(body="Closes #42\n\nWrite `` `closes #43` `` in the hint.\n"))
 
@@ -799,9 +809,10 @@ class ReviewRerunTests(PolicyTest):
 
 
 class WorkflowTriggerTests(unittest.TestCase):
-    """#126 criterion 5: submitting a review runs the check, here and in an adopter's caller."""
+    """#126 criterion 5 and #155: submitting, dismissing or editing a review runs the check,
+    here and in an adopter's caller."""
 
-    TRIGGER = re.compile(r"^(\s*)pull_request_review:\n\1  types: \[submitted\]$", re.M)
+    TRIGGER = re.compile(r"^(\s*)pull_request_review:\n\1  types: \[submitted, dismissed, edited\]$", re.M)
 
     def test_the_workflow_runs_on_a_submitted_review(self):
         text = WORKFLOW.read_text(encoding="utf-8")
