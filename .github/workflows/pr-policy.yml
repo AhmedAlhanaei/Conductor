@@ -1,4 +1,8 @@
-# Project-owned template. Copy to .github/workflows/pr-policy.yml.
+# The `linked-task` checker, a reusable workflow: it has no trigger of its own and runs only
+# when a caller workflow calls it (ADR 0010). An adopter calls it at a release tag with the
+# caller in the README; this repository calls it at the pull request's own commit through
+# `linked-task.yml` (#168). Either way the check reports as `linked-task / linked-task`,
+# never as a bare `linked-task`.
 # Checks that a pull request names exactly one task it closes (a closing keyword inside an
 # inline code span, a fenced code block or a blockquote line is quoted text and does not
 # count) and that the task is open and Ready: it carries exactly one priority (neither the owner-blocked marker nor the tracking
@@ -28,8 +32,9 @@
 # re-running it when its conclusion differs from its own: the review is then the last action
 # anyone takes, in both directions (a review that passes turns the required check green, a
 # request for changes turns it red), and a new push turns it red again. That one call needs
-# "actions: write" on the workflow token, here and in a caller; it is the only write the
-# check makes. A pull request from a fork gets a read-only token on a review, so there the
+# "actions: write" on the workflow token, granted by the caller; it is the only write the
+# check makes. "This workflow" is the one the run id names, so when the checker is called it
+# is the caller's workflow, whose "pull_request" run carries the required check. A pull request from a fork gets a read-only token on a review, so there the
 # re-run fails, the review-event run says so and someone re-runs the check by hand. A review
 # is required when the task carries a priority above
 # CONDUCTOR_ASSISTANT_PRIORITY_CAP, a label listed in CONDUCTOR_OWNER_CATEGORIES or the
@@ -88,10 +93,6 @@
 #                               timeline with no such event, fails the check
 name: PR policy
 on:
-  pull_request:
-    types: [opened, edited, synchronize, reopened]
-  pull_request_review:
-    types: [submitted, dismissed, edited]
   workflow_call:
 concurrency:
   # One group per event: the review-event run re-runs the pull_request-event run, and in a

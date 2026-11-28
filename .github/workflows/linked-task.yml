@@ -1,0 +1,22 @@
+# Conductor's own caller of its `linked-task` checker (#168). Conductor calls
+# `pr-policy.yml` the way an adopter does (ADR 0010), so its pull requests report the check
+# `linked-task / linked-task`, the one name an organization ruleset can require in every
+# repository. The only difference from the adopter's caller in the README is the ref: the
+# local path runs the checker at the pull request's own commit, so every checker change is
+# run on itself here before a release tag moves (ADR 0012). The triggers and permissions are
+# the ones the checker's header lists for a caller; `actions: write` is for the one re-run a
+# review makes.
+name: Linked task
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  pull_request_review:
+    types: [submitted, dismissed, edited]
+permissions:
+  actions: write
+  contents: read
+  issues: read
+  pull-requests: read
+jobs:
+  linked-task:
+    uses: ./.github/workflows/pr-policy.yml
